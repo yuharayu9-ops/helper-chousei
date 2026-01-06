@@ -3,101 +3,136 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>介護マッチング AI v6.3</title>
+    <title>介護マッチング AI v6.5 (AI Studio再現版)</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
-<body class="bg-slate-50 text-slate-900">
+<body class="bg-slate-50">
     <div id="root"></div>
     <script type="text/babel">
         const { useState, useEffect } = React;
+
         function App() {
-            const [helpers, setHelpers] = useState(JSON.parse(localStorage.getItem('cm_helpers') || '[]'));
-            const [schedules, setSchedules] = useState([]);
+            // データの読み込み
+            const [helpers, setHelpers] = useState(() => JSON.parse(localStorage.getItem('cm_helpers_final') || '[]'));
+            const [schedules, setSchedules] = useState(() => JSON.parse(localStorage.getItem('cm_schedules_final') || '[]'));
+            const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key_final') || '');
             const [activeTab, setActiveTab] = useState('matching');
-            const [apiKey, setApiKey] = useState(localStorage.getItem('gemini_api_key') || '');
             const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-            useEffect(() => { localStorage.setItem('cm_helpers', JSON.stringify(helpers)); }, [helpers]);
+            // データの保存（入力するたびに即座に保存）
+            useEffect(() => { localStorage.setItem('cm_helpers_final', JSON.stringify(helpers)); }, [helpers]);
+            useEffect(() => { localStorage.setItem('cm_schedules_final', JSON.stringify(schedules)); }, [schedules]);
+            useEffect(() => { localStorage.setItem('gemini_api_key_final', apiKey); }, [apiKey]);
 
             const handleFileUpload = async (e) => {
                 const file = e.target.files[0];
                 if (!file || !apiKey) { alert("APIキーを入力してください"); return; }
                 setIsAnalyzing(true);
+
                 const reader = new FileReader();
                 reader.readAsDataURL(file);
                 reader.onload = async () => {
                     const base64Data = reader.result.split(',')[1];
-                    // スクリーンショットのエラーを回避するため、最も標準的なモデル名に固定
-                    const modelName = "gemini-1.5-flash";
+                    
+                    // AI Studio(スクリーンショット74)で使用されていた最新のモデル名を使用
+                    const modelName = "gemini-3-pro-preview";
+                    
                     try {
-                        // 接続先を標準の v1 に設定
-                        const res = await fetch(`https://generativelanguage.googleapis.com/v1/models/${modelName}:generateContent?key=${apiKey}`, {
+                        // AI Studioと同じ「v1beta」エンドポイントを使用
+                        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ contents: [{ parts: [
-                                { text: "介護依頼の書類（PDFまたは画像）を解析し、全データを以下のJSON形式のみで出力してください。説明は不要です。 [{\"date\":\"YYYY-MM-DD\", \"time\":\"HH:MM\", \"client\":\"...\", \"service\":\"...\"}]" }, 
-                                { inline_data: { mime_type: file.type, data: base64Data } }
-                            ] }] })
+                            body: JSON.stringify({
+                                contents: [{
+                                    parts: [
+                                        { text: "介護依頼書を解析し、[{\"date\":\"YYYY-MM-DD\", \"time\":\"HH:MM\", \"client\":\"...\", \"service\":\"...\"}] の形式のJSON配列のみを返してください。余計な文章は一切不要です。" },
+                                        { inline_data: { mime_type: file.type, data: base64Data } }
+                                    ]
+                                }],
+                                generationConfig: { temperature: 0.1 } // 精度を上げる設定
+                            })
                         });
+
                         const data = await res.json();
-                        if (data.error) throw new Error(data.error.message);
-                        if (data.candidates) {
+                        
+                        if (data.error) {
+                            throw new Error(`${data.error.status}: ${data.error.message}`);
+                        }
+
+                        if (data.candidates && data.candidates[0].content.parts[0].text) {
                             const text = data.candidates[0].content.parts[0].text;
                             const jsonMatch = text.match(/\[[\s\S]*\]/);
                             if (jsonMatch) {
                                 const result = JSON.parse(jsonMatch[0]);
-                                setSchedules([...result, ...schedules]);
-                                alert(result.length + "件読み込みました。");
+                                setSchedules(prev => [...result, ...prev]);
+                                alert(result.length + "件の読み込みに成功しました！");
                             }
                         }
                     } catch (err) {
-                        alert("接続エラー: " + err.message + "\n※1分待って再試行してください。");
+                        console.error(err);
+                        alert("AI Studioとの接続に失敗しました。\n理由: " + err.message + "\n\n※1分待ってもダメな場合、APIキーにGemini 3の利用権限があるか確認してください。");
                     }
                     setIsAnalyzing(false);
                 };
             };
 
             return (
-                <div className="max-w-5xl mx-auto my-5 bg-white shadow-xl rounded-xl border overflow-hidden">
-                    <header className="bg-slate-800 text-white p-4 flex justify-between items-center border-b-4 border-blue-500">
-                        <h1 className="font-bold tracking-tighter">CARE MATCH v6.3</h1>
-                        <input type="password" placeholder="APIキー" className="text-black text-xs p-2 rounded w-48 shadow-inner" value={apiKey} onChange={(e)=>{setApiKey(e.target.value); localStorage.setItem('gemini_api_key', e.target.value)}} />
+                <div className="max-w-5xl mx-auto my-5 bg-white shadow-2xl rounded-2xl overflow-hidden border">
+                    <header className="bg-slate-900 text-white p-5 flex justify-between items-center">
+                        <div>
+                            <h1 className="text-xl font-bold tracking-tight text-blue-400">CARE MATCH PRO</h1>
+                            <p className="text-[10px] text-slate-400">AI Studio 連携モード v6.5</p>
+                        </div>
+                        <input type="password" placeholder="Google API Key" className="bg-slate-800 text-white text-xs p-2 rounded-lg border border-slate-700 w-64 focus:ring-2 focus:ring-blue-500 outline-none" value={apiKey} onChange={(e)=>setApiKey(e.target.value)} />
                     </header>
-                    <nav className="flex bg-slate-100 border-b font-bold">
-                        <button onClick={()=>setActiveTab('matching')} className={`flex-1 p-4 ${activeTab==='matching'?'bg-white text-blue-600 border-b-4 border-blue-600':''}`}>📅 依頼一括読込</button>
-                        <button onClick={()=>setActiveTab('ledger')} className={`flex-1 p-4 ${activeTab==='ledger'?'bg-white text-blue-600 border-b-4 border-blue-600':''}`}>👥 ヘルパー台帳({helpers.length})</button>
+                    
+                    <nav className="flex bg-slate-50 border-b">
+                        <button onClick={()=>setActiveTab('matching')} className={`flex-1 p-4 font-bold transition-all ${activeTab==='matching'?'bg-white text-blue-600 border-b-4 border-blue-600 shadow-inner':'text-slate-400'}`}>📅 依頼一括読込</button>
+                        <button onClick={()=>setActiveTab('ledger')} className={`flex-1 p-4 font-bold transition-all ${activeTab==='ledger'?'bg-white text-blue-600 border-b-4 border-blue-600 shadow-inner':'text-slate-400'}`}>👥 ヘルパー台帳 ({helpers.length})</button>
                     </nav>
-                    <main className="p-4 min-h-[500px]">
+
+                    <main className="p-6">
                         {activeTab === 'matching' ? (
-                            <div className="space-y-4">
-                                <div className="bg-blue-50 border-2 border-dashed border-blue-200 p-10 rounded-3xl text-center">
-                                    <label className="inline-block bg-blue-600 text-white px-12 py-4 rounded-full cursor-pointer font-bold hover:bg-blue-700 shadow-xl mb-3">
-                                        📁 PDFをここにドラッグまたは選択
+                            <div className="space-y-6">
+                                <div className="grid grid-cols-2 gap-4">
+                                    <label className="flex flex-col items-center justify-center bg-blue-50 border-2 border-dashed border-blue-200 p-8 rounded-3xl cursor-pointer hover:bg-blue-100 transition-all group">
+                                        <span className="text-3xl mb-2 group-hover:scale-110 transition-transform">📄</span>
+                                        <span className="font-bold text-blue-700">PDF / 画像を選択</span>
                                         <input type="file" className="hidden" accept="application/pdf,image/*" onChange={handleFileUpload} />
                                     </label>
-                                    <p className="text-xs text-slate-500 font-bold">※300名分のPDFも数回に分けて読み込めます</p>
+                                    <button onClick={()=>setSchedules([{date:'', time:'', client:'', service:'', helper:''}, ...schedules])} className="flex flex-col items-center justify-center bg-slate-800 text-white p-8 rounded-3xl font-bold hover:bg-slate-900 shadow-lg active:scale-95 transition-all">
+                                        <span className="text-3xl mb-2">➕</span>
+                                        <span>手動で1件追加</span>
+                                    </button>
                                 </div>
-                                <div className="border rounded-xl overflow-hidden bg-white shadow-sm overflow-x-auto">
-                                    <table className="w-full text-sm text-left">
-                                        <thead className="bg-slate-800 text-white font-bold">
-                                            <tr><th className="p-3">日時</th><th className="p-3">利用者</th><th className="p-3">内容</th><th className="p-3 text-blue-300">担当ヘルパー</th><th className="p-3"></th></tr>
+
+                                <div className="border rounded-2xl overflow-hidden shadow-sm">
+                                    <table className="w-full text-sm">
+                                        <thead className="bg-slate-900 text-white">
+                                            <tr>
+                                                <th className="p-3 border-r border-slate-700">日時</th>
+                                                <th className="p-3 border-r border-slate-700">利用者名</th>
+                                                <th className="p-3 border-r border-slate-700">サービス内容</th>
+                                                <th className="p-3 text-blue-400">担当ヘルパー</th>
+                                                <th className="p-3"></th>
+                                            </tr>
                                         </thead>
                                         <tbody>
                                             {schedules.map((s, i) => (
-                                                <tr key={i} className="border-b hover:bg-blue-50/50">
-                                                    <td className="p-2 whitespace-nowrap"><input type="date" className="block text-xs" value={s.date} onChange={(e)=>{const n=[...schedules]; n[i].date=e.target.value; setSchedules(n)}}/><input type="time" className="block text-xs mt-1" value={s.time} onChange={(e)=>{const n=[...schedules]; n[i].time=e.target.value; setSchedules(n)}}/></td>
-                                                    <td className="p-2"><input className="w-full font-bold border-b bg-transparent outline-none" value={s.client} onChange={(e)=>{const n=[...schedules]; n[i].client=e.target.value; setSchedules(n)}}/></td>
-                                                    <td className="p-2"><input className="w-full border-b bg-transparent outline-none" value={s.service} onChange={(e)=>{const n=[...schedules]; n[i].service=e.target.value; setSchedules(n)}}/></td>
-                                                    <td className="p-2">
-                                                        <select className="w-full p-2 border rounded-lg bg-white font-bold text-blue-600" value={s.helper} onChange={(e)=>{const n=[...schedules]; n[i].helper=e.target.value; setSchedules(n)}}>
+                                                <tr key={i} className="border-b hover:bg-blue-50/30">
+                                                    <td className="p-2 border-r"><input type="date" className="block w-full text-xs" value={s.date} onChange={(e)=>{const n=[...schedules]; n[i].date=e.target.value; setSchedules(n)}}/><input type="time" className="block w-full text-xs mt-1" value={s.time} onChange={(e)=>{const n=[...schedules]; n[i].time=e.target.value; setSchedules(n)}}/></td>
+                                                    <td className="p-2 border-r"><input className="w-full font-bold p-1 bg-transparent border-b border-transparent focus:border-blue-400 outline-none" value={s.client} onChange={(e)=>{const n=[...schedules]; n[i].client=e.target.value; setSchedules(n)}}/></td>
+                                                    <td className="p-2 border-r"><input className="w-full p-1 bg-transparent border-b border-transparent focus:border-blue-400 outline-none" value={s.service} onChange={(e)=>{const n=[...schedules]; n[i].service=e.target.value; setSchedules(n)}}/></td>
+                                                    <td className="p-2 border-r">
+                                                        <select className="w-full p-2 font-bold text-blue-600 rounded border border-transparent hover:border-blue-200" value={s.helper} onChange={(e)=>{const n=[...schedules]; n[i].helper=e.target.value; setSchedules(n)}}>
                                                             <option value="">▼ 未選択</option>
                                                             {helpers.map(h=><option key={h.id} value={h.name}>{h.name}</option>)}
                                                         </select>
                                                     </td>
-                                                    <td className="p-2"><button onClick={()=>setSchedules(schedules.filter((_,idx)=>idx!==i))} className="text-slate-300 hover:text-red-500 text-lg px-2">✕</button></td>
+                                                    <td className="p-2 text-center"><button onClick={()=>setSchedules(schedules.filter((_,idx)=>idx!==i))} className="text-slate-300 hover:text-red-500">✕</button></td>
                                                 </tr>
                                             ))}
                                         </tbody>
@@ -106,25 +141,33 @@
                             </div>
                         ) : (
                             <div className="space-y-4">
-                                <button onClick={()=>setHelpers([{id:Date.now(), name:'', ngClients:''}, ...helpers])} className="w-full p-4 bg-slate-800 text-white rounded-xl font-bold shadow-md">+ ヘルパーを新規追加</button>
+                                <button onClick={()=>setHelpers([{id:Date.now(), name:'', ngClients:''}, ...helpers])} className="w-full p-4 bg-blue-600 text-white rounded-2xl font-bold shadow-lg hover:bg-blue-700 transition-all">+ 新しいヘルパーを登録</button>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     {helpers.map(h => (
-                                        <div key={h.id} className="p-4 border-2 rounded-2xl relative bg-white shadow-sm">
-                                            <button onClick={()=>setHelpers(helpers.filter(x=>x.id!==h.id))} className="absolute top-3 right-3 text-slate-300 hover:text-red-500">✕</button>
-                                            <input className="font-bold border-b-2 w-full text-lg mb-2 focus:border-blue-400 outline-none" value={h.name} placeholder="名前" onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).name=e.target.value; setHelpers(n)}} />
-                                            <input className="w-full text-xs border p-2 rounded bg-red-50/20" value={h.ngClients} placeholder="NG利用者" onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).ngClients=e.target.value; setHelpers(n)}} />
+                                        <div key={h.id} className="p-5 border-2 border-slate-100 rounded-3xl bg-white shadow-sm relative group hover:border-blue-300 transition-all">
+                                            <button onClick={()=>setHelpers(helpers.filter(x=>x.id!==h.id))} className="absolute top-4 right-4 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all font-bold">削除✕</button>
+                                            <div className="space-y-3">
+                                                <div>
+                                                    <label className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Helper Name</label>
+                                                    <input className="font-bold border-b-2 w-full text-xl outline-none focus:border-blue-400 py-1" value={h.name} placeholder="名前を入力" onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).name=e.target.value; setHelpers(n)}} />
+                                                </div>
+                                                <div>
+                                                    <label className="text-[10px] text-red-400 font-bold uppercase tracking-widest">NG Clients</label>
+                                                    <input className="w-full text-xs border-2 border-slate-50 p-2 rounded-xl bg-slate-50 focus:bg-white focus:border-red-100 outline-none" value={h.ngClients} placeholder="例: 田中, 佐藤" onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).ngClients=e.target.value; setHelpers(n)}} />
+                                                </div>
+                                            </div>
                                         </div>
                                     ))}
                                 </div>
                             </div>
                         )}
                     </main>
+
                     {isAnalyzing && (
-                        <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-50">
-                            <div className="bg-white p-10 rounded-3xl text-center space-y-4 shadow-2xl">
-                                <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
-                                <p className="font-bold text-lg">大量データを一括解析中...</p>
-                            </div>
+                        <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md flex flex-col items-center justify-center z-50">
+                            <div className="w-20 h-20 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-6"></div>
+                            <p className="text-white font-bold text-2xl animate-pulse">AI Studio のパワーを呼び出し中...</p>
+                            <p className="text-slate-400 mt-2">※300名分のデータも、解析できれば一瞬です</p>
                         </div>
                     )}
                 </div>
