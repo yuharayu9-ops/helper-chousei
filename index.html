@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>介護マッチングシステム</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-gray-100">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        function App() {
+            // --- 状態管理 ---
+            const [viewDate, setViewDate] = useState(new Date());
+            const [helpers, setHelpers] = useState([]); // ヘルパー台帳
+            const [clients, setClients] = useState([]); // 利用者台帳
+            const [schedules, setSchedules] = useState([]); // マッチングデータ
+            const [activeTab, setActiveTab] = useState('matching');
+
+            // --- 当月に戻る ---
+            const goToday = () => setViewDate(new Date());
+
+            // --- 台帳一括削除 ---
+            const clearLedger = () => {
+                if(confirm("台帳データをすべて削除しますか？")) {
+                    setHelpers([]);
+                    setClients([]);
+                }
+            };
+
+            // --- ダミーデータ投入 (テスト用) ---
+            const loadSample = () => {
+                setHelpers([{ id: 1, name: "山田太郎", services: ["移動支援", "行動援護"], priority: "A様" }]);
+                setClients([{ id: 1, name: "利用者A", serviceNeeded: "行動援護" }]);
+            };
+
+            // --- 警告チェックロジック ---
+            const getWarnings = (helperName, clientName, date, time, service) => {
+                let warns = [];
+                // 1. ダブルブッキング
+                const duplicate = schedules.find(s => s.helper === helperName && s.date === date && s.time === time);
+                if (duplicate) warns.push("⚠️ヘルパーの時間が重複しています");
+                
+                // 2. サービス不一致
+                const helper = helpers.find(h => h.name === helperName);
+                if (helper && !helper.services.includes(service)) warns.push("⚠️資格外のサービスです");
+                
+                return warns;
+            };
+
+            return (
+                <div className="max-w-6xl mx-auto p-4">
+                    {/* ヘッダー */}
+                    <header className="bg-blue-800 text-white p-4 rounded-t-lg flex justify-between items-center">
+                        <h1 className="text-xl font-bold">介護マッチング v1.0</h1>
+                        <div className="flex gap-4 items-center">
+                            <button onClick={goToday} className="bg-blue-600 px-3 py-1 rounded hover:bg-blue-500 text-sm">今月に戻る</button>
+                            <input type="month" className="text-black p-1 rounded text-sm" 
+                                value={`${viewDate.getFullYear()}-${String(viewDate.getMonth() + 1).padStart(2, '0')}`}
+                                onChange={(e) => setViewDate(new Date(e.target.value))} />
+                        </div>
+                    </header>
+
+                    {/* タブ切り替え */}
+                    <nav className="flex bg-white border-b">
+                        <button onClick={() => setActiveTab('matching')} className={`px-6 py-3 ${activeTab === 'matching' ? 'border-b-2 border-blue-600 text-blue-600' : ''}`}>マッチング</button>
+                        <button onClick={() => setActiveTab('ledger')} className={`px-6 py-3 ${activeTab === 'ledger' ? 'border-b-2 border-blue-600 text-blue-600' : ''}`}>台帳管理</button>
+                    </nav>
+
+                    {/* メインコンテンツ */}
+                    <main className="bg-white p-6 shadow-md rounded-b-lg">
+                        {activeTab === 'matching' ? (
+                            <div>
+                                <div className="flex justify-between mb-4">
+                                    <h2 className="text-lg font-bold">{viewDate.getFullYear()}年{viewDate.getMonth()+1}月の予定</h2>
+                                    <button onClick={() => setSchedules([...schedules, {date: '', time: '', helper: '', client: '', service: ''}])} className="bg-green-600 text-white px-4 py-1 rounded">+ 新規マッチング</button>
+                                </div>
+                                <table className="w-full border-collapse">
+                                    <thead>
+                                        <tr className="bg-gray-100 text-left">
+                                            <th className="p-2 border">日付</th>
+                                            <th className="p-2 border">時間</th>
+                                            <th className="p-2 border">ヘルパー</th>
+                                            <th className="p-2 border">利用者</th>
+                                            <th className="p-2 border">サービス</th>
+                                            <th className="p-2 border">警告</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {schedules.map((s, i) => (
+                                            <tr key={i}>
+                                                <td className="border p-1"><input type="date" className="w-full" onChange={(e) => {const n=[...schedules]; n[i].date=e.target.value; setSchedules(n)}} /></td>
+                                                <td className="border p-1"><input type="time" className="w-full" onChange={(e) => {const n=[...schedules]; n[i].time=e.target.value; setSchedules(n)}} /></td>
+                                                <td className="border p-1">
+                                                    <select className="w-full" onChange={(e) => {const n=[...schedules]; n[i].helper=e.target.value; setSchedules(n)}}>
+                                                        <option value="">選択</option>
+                                                        {helpers.map(h => <option key={h.id} value={h.name}>{h.name}</option>)}
+                                                    </select>
+                                                </td>
+                                                <td className="border p-1">
+                                                    <select className="w-full" onChange={(e) => {const n=[...schedules]; n[i].client=e.target.value; setSchedules(n)}}>
+                                                        <option value="">選択</option>
+                                                        {clients.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                                                    </select>
+                                                </td>
+                                                <td className="border p-1">
+                                                    <select className="w-full" onChange={(e) => {const n=[...schedules]; n[i].service=e.target.value; setSchedules(n)}}>
+                                                        <option value="移動支援">移動支援</option>
+                                                        <option value="行動援護">行動援護</option>
+                                                        <option value="重度訪問">重度訪問</option>
+                                                        <option value="居宅介護">居宅介護</option>
+                                                    </select>
+                                                </td>
+                                                <td className="border p-1 text-red-500 text-xs">
+                                                    {getWarnings(s.helper, s.client, s.date, s.time, s.service).map(w => <div key={w}>{w}</div>)}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ) : (
+                            <div>
+                                <div className="flex justify-between mb-4">
+                                    <h2 className="text-lg font-bold">ヘルパー・利用者台帳</h2>
+                                    <div className="flex gap-2">
+                                        <button onClick={loadSample} className="bg-blue-100 text-blue-700 px-3 py-1 rounded text-sm">サンプル読込</button>
+                                        <button onClick={clearLedger} className="bg-red-100 text-red-700 px-3 py-1 rounded text-sm">台帳一括削除</button>
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-2 gap-8">
+                                    <div className="border p-4 rounded">
+                                        <h3 className="font-bold mb-2">ヘルパー一覧 (手入力可)</h3>
+                                        <button onClick={() => setHelpers([...helpers, {id: Date.now(), name: "新規", services: ["移動支援"]}])} className="text-sm text-blue-600 mb-2">+ 追加</button>
+                                        {helpers.map(h => (
+                                            <div key={h.id} className="flex gap-2 mb-2 border-b pb-1">
+                                                <input value={h.name} className="border px-1 w-24" onChange={(e) => {const n=[...helpers]; n.find(x=>x.id===h.id).name=e.target.value; setHelpers(n)}} />
+                                                <span className="text-xs text-gray-500">{h.services.join(',')}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div className="border p-4 rounded">
+                                        <h3 className="font-bold mb-2">利用者一覧 (CSV想定)</h3>
+                                        <p className="text-xs text-gray-400 mb-2">※テラシステム等のCSVから名前を抽出してここに反映</p>
+                                        <button onClick={() => setClients([...clients, {id: Date.now(), name: "新規"}])} className="text-sm text-blue-600 mb-2">+ 追加</button>
+                                        {clients.map(c => (
+                                            <div key={c.id} className="flex gap-2 mb-2 border-b pb-1">
+                                                <input value={c.name} className="border px-1 w-24" onChange={(e) => {const n=[...clients]; n.find(x=>x.id===c.id).name=e.target.value; setClients(n)}} />
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+                    </main>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
