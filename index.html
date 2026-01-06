@@ -2,101 +2,152 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>CARE MATCH (コピペ入力版)</title>
+    <title>CARE MATCH v7.5 (Shared Engine)</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
-<body class="bg-slate-50">
+<body class="bg-slate-50 text-slate-900 font-sans">
     <div id="root"></div>
     <script type="text/babel">
         const { useState, useEffect } = React;
 
         function App() {
-            const [helpers, setHelpers] = useState(() => JSON.parse(localStorage.getItem('cm_h') || '[]'));
-            const [schedules, setSchedules] = useState(() => JSON.parse(localStorage.getItem('cm_s') || '[]'));
-            const [inputText, setInputText] = useState('');
+            // データ保存用（ブラウザに保存されるので同僚とPCを共有していれば残ります）
+            const [helpers, setHelpers] = useState(() => JSON.parse(localStorage.getItem('cm_master_h') || '[]'));
+            const [schedules, setSchedules] = useState(() => JSON.parse(localStorage.getItem('cm_data_s') || '[]'));
+            const [apiKey, setApiKey] = useState(() => localStorage.getItem('cm_api_k') || '');
+            const [status, setStatus] = useState('準備完了');
 
-            useEffect(() => { localStorage.setItem('cm_h', JSON.stringify(helpers)); }, [helpers]);
-            useEffect(() => { localStorage.setItem('cm_s', JSON.stringify(schedules)); }, [schedules]);
+            useEffect(() => { localStorage.setItem('cm_master_h', JSON.stringify(helpers)); }, [helpers]);
+            useEffect(() => { localStorage.setItem('cm_data_s', JSON.stringify(schedules)); }, [schedules]);
+            useEffect(() => { localStorage.setItem('cm_api_k', apiKey); }, [apiKey]);
 
-            // AI Studioが出したJSONをそのまま貼り付けて読み込む機能
-            const handleImport = () => {
-                try {
-                    const jsonMatch = inputText.match(/\[[\s\S]*\]/);
-                    if (!jsonMatch) throw new Error("JSON形式のデータが見つかりません。");
-                    const parsed = JSON.parse(jsonMatch[0]);
-                    setSchedules([...parsed, ...schedules]);
-                    setInputText('');
-                    alert(parsed.length + "件の依頼を取り込みました！");
-                } catch (e) {
-                    alert("読み取りに失敗しました。AI Studioの答えをそのまま全部コピーして貼り付けてください。");
-                }
+            const runAnalysis = async (e) => {
+                const file = e.target.files[0];
+                if (!apiKey) { alert("右上の設定からAPIキーを入力してください"); return; }
+                setStatus('⏳ AIが解析中...');
+
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = async () => {
+                    const base64 = reader.result.split(',')[1];
+                    try {
+                        // 【最重要】v1betaかつmodels/プレフィックス付きで、最も汎用的なエンドポイントを叩く
+                        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+                        
+                        const response = await fetch(url, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                contents: [{
+                                    parts: [
+                                        { text: "介護の依頼を抽出してください。必ず[{\"date\":\"YYYY-MM-DD\", \"time\":\"HH:MM\", \"client\":\"...\", \"service\":\"...\"}]というJSON配列の形式だけで答えてください。" },
+                                        { inline_data: { mime_type: file.type, data: base64 } }
+                                    ]
+                                }]
+                            })
+                        });
+
+                        const data = await response.json();
+                        if (data.error) throw new Error(data.error.message);
+
+                        const text = data.candidates[0].content.parts[0].text;
+                        const json = JSON.parse(text.match(/\[[\s\S]*\]/)[0]);
+                        
+                        setSchedules([...json, ...schedules]);
+                        setStatus(`✅ ${json.length}件の読み込みに成功！`);
+                    } catch (err) {
+                        setStatus(`❌ エラー: ${err.message}`);
+                        console.error(err);
+                    }
+                };
             };
 
             return (
-                <div className="max-w-4xl mx-auto my-10 p-6 bg-white rounded-3xl shadow-xl">
-                    <h1 className="text-2xl font-black mb-6 border-b-4 border-slate-900 pb-2">CARE MATCH</h1>
-
-                    {/* ステップ1: AI Studioからコピペ */}
-                    <div className="mb-10 bg-blue-50 p-6 rounded-2xl border-2 border-blue-200">
-                        <h2 className="font-bold mb-2 text-blue-800 text-lg">① AI Studioの結果をここに貼り付け</h2>
-                        <p className="text-xs text-blue-600 mb-4">AI Studioで解析して出てきた [ ] の記号を含む文字を全部ここに貼ってください。</p>
-                        <textarea 
-                            className="w-full h-32 p-3 border rounded-xl text-xs font-mono mb-3" 
-                            placeholder="ここに貼り付け..."
-                            value={inputText}
-                            onChange={(e) => setInputText(e.target.value)}
-                        />
-                        <button onClick={handleImport} className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700">
-                            データを取り込む
-                        </button>
-                    </div>
-
-                    {/* ステップ2: マッチング */}
-                    <div className="mb-10">
-                        <h2 className="font-bold mb-4 text-lg">② スケジュール確認・調整</h2>
-                        <table className="w-full text-sm border">
-                            <thead className="bg-slate-100">
-                                <tr>
-                                    <th className="p-2 border">日時</th>
-                                    <th className="p-2 border">利用者</th>
-                                    <th className="p-2 border text-blue-600">担当ヘルパー</th>
-                                    <th className="p-2 border"></th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {schedules.map((s, i) => (
-                                    <tr key={i} className="border-b">
-                                        <td className="p-2 border">{s.date} {s.time}</td>
-                                        <td className="p-2 border font-bold">{s.client}</td>
-                                        <td className="p-2 border">
-                                            <select className="w-full text-blue-600 font-bold" value={s.helper} onChange={(e)=>{const n=[...schedules]; n[i].helper=e.target.value; setSchedules(n)}}>
-                                                <option value="">▼ 未選択</option>
-                                                {helpers.map(h => <option key={h.id} value={h.name}>{h.name}</option>)}
-                                            </select>
-                                        </td>
-                                        <td className="p-2 border text-center"><button onClick={() => setSchedules(schedules.filter((_, idx) => idx !== i))}>✕</button></td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-
-                    {/* ステップ3: ヘルパー登録 */}
-                    <div className="p-6 bg-slate-50 rounded-2xl border">
-                        <h2 className="font-bold mb-4 text-lg">③ ヘルパー台帳（名前を登録）</h2>
-                        <div className="flex gap-2 mb-4">
-                            <button onClick={()=>setHelpers([{id:Date.now(), name:''}, ...helpers])} className="bg-slate-800 text-white px-6 py-2 rounded-xl font-bold">+ ヘルパーを追加</button>
+                <div className="max-w-5xl mx-auto my-10 bg-white shadow-2xl rounded-3xl overflow-hidden border">
+                    <header className="bg-slate-900 text-white p-6 flex justify-between items-center border-b-4 border-blue-500">
+                        <div>
+                            <h1 className="text-2xl font-black italic tracking-tighter">CARE MATCH</h1>
+                            <p className="text-[10px] text-blue-400 font-bold">STAFF COORDINATION SYSTEM</p>
                         </div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                            {helpers.map(h => (
-                                <div key={h.id} className="p-3 bg-white border rounded-xl relative group">
-                                    <input className="font-bold w-full outline-none" value={h.name} placeholder="お名前" onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).name=e.target.value; setHelpers(n)}} />
-                                    <button onClick={()=>setHelpers(helpers.filter(x=>x.id!==h.id))} className="absolute top-1 right-1 text-slate-300">✕</button>
-                                </div>
-                            ))}
+                        <input 
+                            type="password" 
+                            placeholder="API Keyを入力（初回のみ）" 
+                            className="bg-slate-800 text-xs p-2 rounded-lg border border-slate-700 w-64 outline-none focus:ring-2 focus:ring-blue-500"
+                            value={apiKey}
+                            onChange={(e)=>setApiKey(e.target.value)}
+                        />
+                    </header>
+
+                    <div className="p-8">
+                        {/* 状態表示ラベル */}
+                        <div className={`mb-6 p-4 rounded-2xl text-center font-bold border-2 transition-all ${status.includes('❌') ? 'bg-red-50 border-red-200 text-red-600' : 'bg-blue-50 border-blue-100 text-blue-600'}`}>
+                            {status}
+                        </div>
+
+                        {/* メイン操作ボタン */}
+                        <div className="grid grid-cols-2 gap-6 mb-12">
+                            <label className="flex flex-col items-center justify-center p-12 bg-blue-600 text-white rounded-[40px] cursor-pointer hover:bg-blue-700 shadow-xl transition-all active:scale-95 group">
+                                <span className="text-5xl mb-3 group-hover:scale-110 transition-transform">📄</span>
+                                <span className="text-xl font-bold italic">AUTO SCAN</span>
+                                <p className="text-xs mt-2 opacity-70 font-bold">PDF/画像を投げ込むだけ</p>
+                                <input type="file" className="hidden" onChange={runAnalysis} />
+                            </label>
+                            
+                            <button onClick={()=>setSchedules([{date:'',time:'',client:'',service:''},...schedules])} className="flex flex-col items-center justify-center p-12 bg-slate-800 text-white rounded-[40px] shadow-xl hover:bg-slate-900 transition-all active:scale-95 group">
+                                <span className="text-5xl mb-3 group-hover:rotate-90 transition-transform">＋</span>
+                                <span className="text-xl font-bold italic">MANUAL ADD</span>
+                                <p className="text-xs mt-2 opacity-70 font-bold">電話や急な追加はこちら</p>
+                            </button>
+                        </div>
+
+                        {/* マッチングテーブル */}
+                        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden mb-12">
+                            <table className="w-full text-sm">
+                                <thead className="bg-slate-900 text-white">
+                                    <tr>
+                                        <th className="p-4 text-left border-r border-slate-700">訪問日時</th>
+                                        <th className="p-4 text-left border-r border-slate-700">利用者名</th>
+                                        <th className="p-4 text-left border-r border-slate-700">サービス内容</th>
+                                        <th className="p-4 text-left text-blue-400">担当ヘルパー</th>
+                                        <th className="p-4"></th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {schedules.map((s, i) => (
+                                        <tr key={i} className="border-b hover:bg-blue-50/20 transition-colors">
+                                            <td className="p-2 border-r"><input type="date" className="block w-full mb-1 p-1 rounded" value={s.date} onChange={(e)=>{const n=[...schedules]; n[i].date=e.target.value; setSchedules(n)}}/><input type="time" className="block w-full p-1 rounded" value={s.time} onChange={(e)=>{const n=[...schedules]; n[i].time=e.target.value; setSchedules(n)}}/></td>
+                                            <td className="p-2 border-r font-black"><input className="w-full p-2 bg-transparent focus:bg-white outline-none" value={s.client} onChange={(e)=>{const n=[...schedules]; n[i].client=e.target.value; setSchedules(n)}}/></td>
+                                            <td className="p-2 border-r"><input className="w-full p-2 bg-transparent focus:bg-white outline-none" value={s.service} onChange={(e)=>{const n=[...schedules]; n[i].service=e.target.value; setSchedules(n)}}/></td>
+                                            <td className="p-2 border-r">
+                                                <select className="w-full p-2 font-bold text-blue-600 rounded bg-white border border-blue-100" value={s.helper} onChange={(e)=>{const n=[...schedules]; n[i].helper=e.target.value; setSchedules(n)}}>
+                                                    <option value="">▼ 未選択</option>
+                                                    {helpers.map(h => <option key={h.id} value={h.name}>{h.name}</option>)}
+                                                </select>
+                                            </td>
+                                            <td className="p-2 text-center"><button onClick={()=>setSchedules(schedules.filter((_,idx)=>idx!==i))} className="text-slate-300 hover:text-red-500 font-bold text-xl">✕</button></td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        {/* ヘルパー台帳 */}
+                        <div className="bg-slate-50 p-8 rounded-[40px] border-2 border-slate-200">
+                            <div className="flex justify-between items-center mb-6">
+                                <h2 className="text-xl font-black italic">HELPER LIST</h2>
+                                <button onClick={()=>setHelpers([{id:Date.now(), name:''}, ...helpers])} className="bg-slate-900 text-white px-6 py-2 rounded-2xl font-bold shadow-lg">+ ADD NEW</button>
+                            </div>
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                {helpers.map(h => (
+                                    <div key={h.id} className="p-4 bg-white border-2 border-slate-200 rounded-2xl relative group hover:border-blue-400 transition-all shadow-sm">
+                                        <input className="font-bold w-full outline-none bg-transparent" value={h.name} placeholder="お名前" onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).name=e.target.value; setHelpers(n)}} />
+                                        <button onClick={()=>setHelpers(helpers.filter(x=>x.id!==h.id))} className="absolute top-1 right-2 text-slate-200 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">✕</button>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     </div>
                 </div>
