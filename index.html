@@ -1,9 +1,113 @@
-// --- 修正箇所（APIキーを画面に少しだけ表示して確認する） ---
-const handleAIUpload = async (e, type) => {
-    const file = e.target.files[0];
-    if (!apiKey) {
-        alert("エラー：APIキーが空っぽです！右上の欄に入力してください。");
-        return;
-    }
-    alert("今からこのキーで通信します: " + apiKey.substring(0, 5) + "...");
-    // ...
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>介護マッチング・スマートAI v4.6</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-50 text-slate-900">
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        function App() {
+            const [helpers, setHelpers] = useState([]);
+            const [clients, setClients] = useState([]);
+            const [schedules, setSchedules] = useState([]);
+            const [activeTab, setActiveTab] = useState('matching');
+            const [apiKey, setApiKey] = useState(localStorage.getItem('gemini_api_key') || '');
+            const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+            const saveApiKey = (key) => {
+                setApiKey(key);
+                localStorage.setItem('gemini_api_key', key);
+            };
+
+            const handleAIUpload = async (e, type) => {
+                const file = e.target.files[0];
+                if (!file || !apiKey) {
+                    alert("APIキーを右上の欄に入力してください。");
+                    return;
+                }
+                setIsAnalyzing(true);
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = async () => {
+                    const base64Data = reader.result.split(',')[1];
+                    const helperInfo = helpers.map(h => `${h.name}(可能日:${h.shiftMemo}, NG:${h.ngClients})`).join('\n');
+                    const prompt = type === 'request' 
+                        ? `画像から介護依頼(date, time, client, service)を抽出しJSON配列で返せ。可能なら以下から選んで割り当てろ:\n${helperInfo}`
+                        : `ヘルパー稼働連絡から {helper_name, available_dates:[], notes} を抽出しJSONで返せ。`;
+                    
+                    try {
+                        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: "image/jpeg", data: base64Data } }] }] })
+                        });
+                        const data = await res.json();
+                        if (data.error) throw new Error(data.error.message);
+                        const jsonStr = data.candidates[0].content.parts[0].text.match(/\[.*\]|\{.*\}/s)[0];
+                        const result = JSON.parse(jsonStr);
+                        if (type === 'request') setSchedules([...schedules, ...result]);
+                        else {
+                            const newH = [...helpers];
+                            const t = newH.find(h => h.name === result.helper_name);
+                            if (t) { t.shiftMemo = result.available_dates.join(','); setHelpers(newH); }
+                            alert("読込完了");
+                        }
+                    } catch (err) {
+                        alert("解析失敗。理由: " + err.message);
+                    }
+                    setIsAnalyzing(false);
+                };
+            };
+
+            return (
+                <div className="max-w-6xl mx-auto my-4 shadow-2xl rounded-2xl bg-white overflow-hidden border">
+                    <header className="bg-slate-900 text-white p-6 flex justify-between items-center">
+                        <h1 className="text-2xl font-black">CARE MATCH AI</h1>
+                        <input type="password" placeholder="APIキー(AIza...)" className="text-black text-xs p-2 rounded w-64" value={apiKey} onChange={(e)=>saveApiKey(e.target.value)} />
+                    </header>
+                    <nav className="flex bg-slate-100 border-b">
+                        <button onClick={()=>setActiveTab('matching')} className={`flex-1 py-4 font-bold ${activeTab==='matching'?'bg-white text-blue-600':''}`}>📅 マッチング</button>
+                        <button onClick={()=>setActiveTab('ledger')} className={`flex-1 py-4 font-bold ${activeTab==='ledger'?'bg-white text-blue-600':''}`}>👥 台帳管理</button>
+                    </nav>
+                    <main className="p-6">
+                        {activeTab === 'matching' ? (
+                            <div className="space-y-4">
+                                <label className="block bg-blue-600 text-white p-4 rounded-xl text-center font-bold cursor-pointer">
+                                    📸 利用者依頼を読込
+                                    <input type="file" className="hidden" onChange={(e)=>handleAIUpload(e, 'request')} />
+                                </label>
+                                <div className="border rounded-xl overflow-x-auto">
+                                    <table className="w-full text-sm italic text-slate-400">
+                                        <thead className="bg-slate-800 text-white not-italic">
+                                            <tr><th className="p-3 text-left">日付</th><th className="p-3 text-left">時間</th><th className="p-3 text-left">利用者</th><th className="p-3 text-left">担当ヘルパー</th></tr>
+                                        </thead>
+                                        <tbody>
+                                            {schedules.map((s, i) => (
+                                                <tr key={i} className="text-slate-900 not-italic border-b">
+                                                    <td className="p-3">{s.date}</td><td className="p-3">{s.time}</td><td className="p-3">{s.client}</td><td className="p-3 font-bold text-blue-600">{s.helper || "未割当"}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="p-4 text-center text-slate-500">台帳管理画面（省略）</div>
+                        )}
+                    </main>
+                    {isAnalyzing && <div className="fixed inset-0 bg-black/50 flex items-center justify-center text-white font-bold text-xl">AI解析中...</div>}
+                </div>
+            );
+        }
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
