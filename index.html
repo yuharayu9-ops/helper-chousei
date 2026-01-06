@@ -2,135 +2,99 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>CARE MATCH v7.2 (Final Fix)</title>
+    <title>CARE MATCH (コピペ入力版)</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
-<body class="bg-slate-50 text-slate-900">
+<body class="bg-slate-50">
     <div id="root"></div>
     <script type="text/babel">
         const { useState, useEffect } = React;
 
         function App() {
-            const [helpers, setHelpers] = useState(() => JSON.parse(localStorage.getItem('cm_h_final') || '[]'));
-            const [schedules, setSchedules] = useState(() => JSON.parse(localStorage.getItem('cm_s_final') || '[]'));
-            const [apiKey, setApiKey] = useState(() => localStorage.getItem('cm_k_final') || '');
-            const [status, setStatus] = useState('準備完了');
+            const [helpers, setHelpers] = useState(() => JSON.parse(localStorage.getItem('cm_h') || '[]'));
+            const [schedules, setSchedules] = useState(() => JSON.parse(localStorage.getItem('cm_s') || '[]'));
+            const [inputText, setInputText] = useState('');
 
-            useEffect(() => { localStorage.setItem('cm_h_final', JSON.stringify(helpers)); }, [helpers]);
-            useEffect(() => { localStorage.setItem('cm_s_final', JSON.stringify(schedules)); }, [schedules]);
-            useEffect(() => { localStorage.setItem('cm_k_final', apiKey); }, [apiKey]);
+            useEffect(() => { localStorage.setItem('cm_h', JSON.stringify(helpers)); }, [helpers]);
+            useEffect(() => { localStorage.setItem('cm_s', JSON.stringify(schedules)); }, [schedules]);
 
-            const runAI = async (e) => {
-                const file = e.target.files[0];
-                if (!apiKey) { alert("APIキーを入力してください"); return; }
-                setStatus('AIが解析中...');
-
-                const reader = new FileReader();
-                reader.readAsDataURL(file);
-                reader.onload = async () => {
-                    const base64 = reader.result.split(',')[1];
-                    try {
-                        // 【修正】モデル名を正規の「gemini-1.5-flash」に固定
-                        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-                        
-                        const response = await fetch(url, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                contents: [{
-                                    parts: [
-                                        { text: "介護の依頼書を解析し、[{\"date\":\"YYYY-MM-DD\", \"time\":\"HH:MM\", \"client\":\"...\", \"service\":\"...\"}] のJSON形式でデータのみ抽出してください。" },
-                                        { inline_data: { mime_type: file.type, data: base64 } }
-                                    ]
-                                }]
-                            })
-                        });
-
-                        const result = await response.json();
-                        if (result.error) throw new Error(result.error.message);
-
-                        const aiText = result.candidates[0].content.parts[0].text;
-                        const jsonMatch = aiText.match(/\[[\s\S]*\]/);
-                        if (jsonMatch) {
-                            const parsed = JSON.parse(jsonMatch[0]);
-                            setSchedules([...parsed, ...schedules]);
-                            setStatus(`${parsed.length}件の読み込みに成功しました`);
-                        }
-                    } catch (err) {
-                        setStatus("エラー: " + err.message);
-                        alert("解析に失敗しました。APIキーまたはファイル形式を確認してください。");
-                    }
-                };
+            // AI Studioが出したJSONをそのまま貼り付けて読み込む機能
+            const handleImport = () => {
+                try {
+                    const jsonMatch = inputText.match(/\[[\s\S]*\]/);
+                    if (!jsonMatch) throw new Error("JSON形式のデータが見つかりません。");
+                    const parsed = JSON.parse(jsonMatch[0]);
+                    setSchedules([...parsed, ...schedules]);
+                    setInputText('');
+                    alert(parsed.length + "件の依頼を取り込みました！");
+                } catch (e) {
+                    alert("読み取りに失敗しました。AI Studioの答えをそのまま全部コピーして貼り付けてください。");
+                }
             };
 
             return (
-                <div className="max-w-4xl mx-auto my-10 p-6 bg-white rounded-3xl shadow-2xl">
-                    <header className="flex justify-between items-center mb-8 bg-slate-900 p-5 rounded-2xl text-white">
-                        <h1 className="text-xl font-black tracking-tighter">CARE MATCH v7.2</h1>
-                        <div className="text-right">
-                            <p className="text-[10px] text-blue-400 font-bold mb-1">API KEY SETTING</p>
-                            <input type="password" placeholder="AI Studioのキーを貼る" className="p-2 rounded bg-slate-800 text-white text-xs w-64 border border-slate-700 outline-none focus:ring-1 focus:ring-blue-500" value={apiKey} onChange={(e)=>setApiKey(e.target.value)} />
-                        </div>
-                    </header>
+                <div className="max-w-4xl mx-auto my-10 p-6 bg-white rounded-3xl shadow-xl">
+                    <h1 className="text-2xl font-black mb-6 border-b-4 border-slate-900 pb-2">CARE MATCH</h1>
 
-                    <div className={`mb-6 p-4 rounded-xl font-bold text-center border-2 ${status.includes('エラー') ? 'bg-red-50 border-red-100 text-red-600' : 'bg-blue-50 border-blue-100 text-blue-600'}`}>
-                        {status}
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-6 mb-8">
-                        <label className="flex flex-col items-center justify-center p-12 bg-blue-600 text-white rounded-3xl cursor-pointer hover:bg-blue-700 shadow-xl transition-transform active:scale-95">
-                            <span className="text-4xl mb-2">📄</span>
-                            <span className="font-bold text-lg">PDF/画像を解析</span>
-                            <input type="file" className="hidden" onChange={runAI} />
-                        </label>
-                        <button onClick={() => setSchedules([{date:'', time:'', client:'', service:'', helper:''}, ...schedules])} className="p-12 bg-slate-100 rounded-3xl font-bold hover:bg-slate-200 transition-transform active:scale-95 border-2 border-slate-200">
-                            ➕ 手動で1件追加
+                    {/* ステップ1: AI Studioからコピペ */}
+                    <div className="mb-10 bg-blue-50 p-6 rounded-2xl border-2 border-blue-200">
+                        <h2 className="font-bold mb-2 text-blue-800 text-lg">① AI Studioの結果をここに貼り付け</h2>
+                        <p className="text-xs text-blue-600 mb-4">AI Studioで解析して出てきた [ ] の記号を含む文字を全部ここに貼ってください。</p>
+                        <textarea 
+                            className="w-full h-32 p-3 border rounded-xl text-xs font-mono mb-3" 
+                            placeholder="ここに貼り付け..."
+                            value={inputText}
+                            onChange={(e) => setInputText(e.target.value)}
+                        />
+                        <button onClick={handleImport} className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700">
+                            データを取り込む
                         </button>
                     </div>
 
-                    <div className="border rounded-2xl overflow-hidden shadow-sm overflow-x-auto">
-                        <table className="w-full text-sm">
-                            <thead className="bg-slate-100 border-b">
+                    {/* ステップ2: マッチング */}
+                    <div className="mb-10">
+                        <h2 className="font-bold mb-4 text-lg">② スケジュール確認・調整</h2>
+                        <table className="w-full text-sm border">
+                            <thead className="bg-slate-100">
                                 <tr>
-                                    <th className="p-3 text-left">日時</th>
-                                    <th className="p-3 text-left">利用者名</th>
-                                    <th className="p-3 text-left">サービス内容</th>
-                                    <th className="p-3 text-left text-blue-600">担当ヘルパー</th>
-                                    <th className="p-3"></th>
+                                    <th className="p-2 border">日時</th>
+                                    <th className="p-2 border">利用者</th>
+                                    <th className="p-2 border text-blue-600">担当ヘルパー</th>
+                                    <th className="p-2 border"></th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {schedules.map((s, i) => (
-                                    <tr key={i} className="border-b hover:bg-slate-50">
-                                        <td className="p-2 whitespace-nowrap"><input type="date" className="block text-xs mb-1" value={s.date} onChange={(e)=>{const n=[...schedules]; n[i].date=e.target.value; setSchedules(n)}}/><input type="time" className="block text-xs" value={s.time} onChange={(e)=>{const n=[...schedules]; n[i].time=e.target.value; setSchedules(n)}}/></td>
-                                        <td className="p-2"><input className="w-full font-bold p-1 bg-transparent" value={s.client} onChange={(e)=>{const n=[...schedules]; n[i].client=e.target.value; setSchedules(n)}}/></td>
-                                        <td className="p-2"><input className="w-full p-1 bg-transparent" value={s.service} onChange={(e)=>{const n=[...schedules]; n[i].service=e.target.value; setSchedules(n)}}/></td>
-                                        <td className="p-2">
-                                            <select className="w-full p-2 text-blue-600 font-bold bg-white border rounded" value={s.helper} onChange={(e)=>{const n=[...schedules]; n[i].helper=e.target.value; setSchedules(n)}}>
+                                    <tr key={i} className="border-b">
+                                        <td className="p-2 border">{s.date} {s.time}</td>
+                                        <td className="p-2 border font-bold">{s.client}</td>
+                                        <td className="p-2 border">
+                                            <select className="w-full text-blue-600 font-bold" value={s.helper} onChange={(e)=>{const n=[...schedules]; n[i].helper=e.target.value; setSchedules(n)}}>
                                                 <option value="">▼ 未選択</option>
                                                 {helpers.map(h => <option key={h.id} value={h.name}>{h.name}</option>)}
                                             </select>
                                         </td>
-                                        <td className="p-2 text-center"><button onClick={() => setSchedules(schedules.filter((_, idx) => idx !== i))} className="text-slate-300 hover:text-red-500 font-bold text-xl">✕</button></td>
+                                        <td className="p-2 border text-center"><button onClick={() => setSchedules(schedules.filter((_, idx) => idx !== i))}>✕</button></td>
                                     </tr>
                                 ))}
                             </tbody>
                         </table>
                     </div>
 
-                    <div className="mt-12 p-8 bg-slate-50 rounded-3xl border-2 border-slate-100">
-                        <div className="flex justify-between items-center mb-6">
-                            <h2 className="text-2xl font-black">👥 ヘルパー台帳</h2>
-                            <button onClick={()=>setHelpers([{id:Date.now(), name:''}, ...helpers])} className="bg-slate-800 text-white px-6 py-2 rounded-xl font-bold shadow-md hover:bg-black transition-colors">+ ヘルパーを追加</button>
+                    {/* ステップ3: ヘルパー登録 */}
+                    <div className="p-6 bg-slate-50 rounded-2xl border">
+                        <h2 className="font-bold mb-4 text-lg">③ ヘルパー台帳（名前を登録）</h2>
+                        <div className="flex gap-2 mb-4">
+                            <button onClick={()=>setHelpers([{id:Date.now(), name:''}, ...helpers])} className="bg-slate-800 text-white px-6 py-2 rounded-xl font-bold">+ ヘルパーを追加</button>
                         </div>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                             {helpers.map(h => (
-                                <div key={h.id} className="p-4 bg-white border rounded-2xl shadow-sm relative group">
-                                    <input className="font-bold w-full outline-none bg-transparent" value={h.name} placeholder="お名前" onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).name=e.target.value; setHelpers(n)}} />
-                                    <button onClick={()=>setHelpers(helpers.filter(x=>x.id!==h.id))} className="absolute top-1 right-2 text-slate-200 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">✕</button>
+                                <div key={h.id} className="p-3 bg-white border rounded-xl relative group">
+                                    <input className="font-bold w-full outline-none" value={h.name} placeholder="お名前" onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).name=e.target.value; setHelpers(n)}} />
+                                    <button onClick={()=>setHelpers(helpers.filter(x=>x.id!==h.id))} className="absolute top-1 right-1 text-slate-300">✕</button>
                                 </div>
                             ))}
                         </div>
