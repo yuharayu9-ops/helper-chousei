@@ -3,28 +3,27 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>介護マッチング・トータル管理 v3.0</title>
+    <title>介護マッチング・スマートAI v4.0</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
-<body class="bg-slate-100 text-slate-800 font-sans">
+<body class="bg-slate-50 text-slate-900">
     <div id="root"></div>
 
     <script type="text/babel">
         const { useState } = React;
 
         function App() {
-            const [viewDate, setViewDate] = useState(new Date());
-            const [helpers, setHelpers] = useState([]);
-            const [clients, setClients] = useState([]);
+            const [helpers, setHelpers] = useState([]); // {id, name, type, services:[], shiftMemo:'', ngClients:''}
+            const [clients, setClients] = useState([]); // {id, name}
             const [schedules, setSchedules] = useState([]);
             const [activeTab, setActiveTab] = useState('matching');
             const [apiKey, setApiKey] = useState('');
             const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-            // --- AI解析エンジン ---
+            // --- AI解析 (自動マッチング考慮) ---
             const handleAIUpload = async (e, type) => {
                 const file = e.target.files[0];
                 const key = apiKey || "NEXT_PUBLIC_GEMINI_API_KEY";
@@ -37,11 +36,19 @@
                     const base64Data = reader.result.split(',')[1];
                     let prompt = "";
                     
-                    // 依頼の種類によって命令を切り替え
-                    if (type === 'schedule') prompt = "介護予定表から date(YYYY-MM-DD), time(HH:MM), client, helper, service を抽出しJSON配列で返して。";
-                    if (type === 'request') prompt = "利用者からのサービス依頼書(FAX等)から、希望日(date:YYYY-MM-DD)、希望時間(time:HH:MM)、利用者名(client)、希望サービス(service)を抽出し、helperは空欄のままでJSON配列形式で返して。";
-                    if (type === 'helper_shift') prompt = "ヘルパーの勤務可能連絡から helper_name, available_dates(YYYY-MM-DDの配列), notesを抽出しJSONで返して。";
-                    if (type === 'client_list') prompt = "名簿から利用者名のリストを抽出し {names: ['名前1', '名前2']} 形式で返して。";
+                    if (type === 'request') {
+                        // 利用者依頼を読み込む際、既存のヘルパー情報（稼働日・NG）をAIに渡してマッチングさせる
+                        const helperInfo = helpers.map(h => `${h.name}(可能日メモ:${h.shiftMemo}, NG:${h.ngClients})`).join('\n');
+                        prompt = `以下のヘルパー情報を元に、画像（利用者依頼）から予定を抽出して。
+                        【ヘルパー情報】\n${helperInfo}\n
+                        【ルール】
+                        1. date(YYYY-MM-DD), time(HH:MM), client, serviceを抽出。
+                        2. 可能日メモと日付が合致し、かつNG名に利用者が含まれないヘルパーがいればhelperに入れる。
+                        3. いなければhelperは空欄。
+                        JSON配列のみ返して。`;
+                    } else if (type === 'helper_shift') {
+                        prompt = "ヘルパーの勤務可能連絡から helper_name, available_dates(YYYY-MM-DDの配列), notesを抽出しJSONで返して。";
+                    }
                     
                     try {
                         const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`, {
@@ -53,137 +60,104 @@
                         const jsonStr = data.candidates[0].content.parts[0].text.match(/\[.*\]|\{.*\}/s)[0];
                         const result = JSON.parse(jsonStr);
 
-                        if (type === 'schedule' || type === 'request') {
+                        if (type === 'request') {
                             setSchedules([...schedules, ...result]);
-                            alert(type === 'request' ? "利用者からの依頼を『未割り当て予定』として追加しました。" : "予定表を読み込みました。");
-                        }
-                        if (type === 'helper_shift') {
+                        } else if (type === 'helper_shift') {
                             const newHelpers = [...helpers];
                             const target = newHelpers.find(h => h.name === result.helper_name);
                             if (target) {
-                                target.shiftMemo = `【AI読込】可:${result.available_dates?.join(', ')} / ${result.notes || ''}`;
+                                target.shiftMemo = `可:${result.available_dates?.join(',')} / ${result.notes || ''}`;
                                 setHelpers(newHelpers);
-                                alert(`${result.helper_name}さんのシフトを更新しました。`);
+                                alert(`${result.helper_name}さんの稼働日を更新しました。`);
                             }
                         }
-                        if (type === 'client_list') {
-                            const newC = result.names.map(name => ({ id: Math.random(), name }));
-                            setClients([...clients, ...newC]);
-                        }
-                    } catch (err) { alert("解析失敗。形式が違うか、APIキーが未設定です。"); }
+                    } catch (err) { alert("解析失敗。APIキー設定を確認してください。"); }
                     setIsAnalyzing(false);
                 };
             };
 
-            // CSV読込
-            const handleCSVUpload = (e) => {
-                const file = e.target.files[0];
-                if (!file) return;
-                const reader = new FileReader();
-                reader.onload = (event) => {
-                    const lines = event.target.result.split('\n');
-                    const newClients = lines.slice(1).map(line => {
-                        const cols = line.split(',');
-                        const name = cols[0]?.replace(/"/g, '').trim();
-                        return name ? { id: Math.random(), name } : null;
-                    }).filter(c => c !== null);
-                    setClients([...clients, ...newClients]);
-                };
-                reader.readAsText(file, "Shift-JIS");
-            };
-
+            // 警告判定 (相性NG・稼働日・重複)
             const checkAlert = (s, i) => {
                 const alerts = [];
-                if (!s.helper) alerts.push("未割当");
-                if (schedules.some((other, idx) => i !== idx && other.helper === s.helper && other.date === s.date && other.time === s.time && s.helper)) alerts.push("重");
+                if (!s.helper) return ["未割当"];
+                
                 const h = helpers.find(x => x.name === s.helper);
                 if (h) {
-                    if (s.service && !h.services.includes(s.service)) alerts.push("資");
-                    if (h.shiftMemo && !h.shiftMemo.includes(s.date)) alerts.push("？休");
+                    // 相性NGチェック
+                    if (h.ngClients && h.ngClients.includes(s.client)) alerts.push("❌NG相性");
+                    // 稼働日チェック
+                    if (h.shiftMemo && !h.shiftMemo.includes(s.date)) alerts.push("⚠️非稼働日");
+                    // 資格
+                    if (s.service && h.services.length > 0 && !h.services.includes(s.service)) alerts.push("❗資格外");
                 }
+                // 重複
+                if (schedules.some((other, idx) => i !== idx && other.helper === s.helper && other.date === s.date && other.time === s.time)) alerts.push("🕒重複");
+                
                 return alerts;
             };
 
             return (
-                <div className="max-w-6xl mx-auto my-6 shadow-2xl rounded-2xl bg-white overflow-hidden border border-slate-200">
-                    <header className="bg-gradient-to-r from-blue-900 to-slate-900 text-white p-6 flex justify-between items-center">
+                <div className="max-w-6xl mx-auto my-4 shadow-2xl rounded-2xl bg-white overflow-hidden border border-slate-200 font-sans">
+                    <header className="bg-slate-900 text-white p-6 flex justify-between items-center border-b-4 border-blue-600">
                         <div>
-                            <h1 className="text-2xl font-black tracking-tight italic">CARE MATCH ALL-IN-ONE</h1>
-                            <p className="text-[10px] text-blue-300 font-bold uppercase tracking-widest">利用者依頼・ヘルパーシフト 完全統合版</p>
+                            <h1 className="text-2xl font-black">CARE MATCH AI <span className="text-blue-400 text-sm">v4.0</span></h1>
+                            <p className="text-[10px] text-slate-400">利用者依頼・ヘルパー稼働日・NG相性 管理</p>
                         </div>
-                        <input type="password" placeholder="Gemini API Key" className="text-black text-xs p-2 rounded-lg w-48 shadow-inner" value={apiKey} onChange={(e)=>setApiKey(e.target.value)} />
+                        <input type="password" placeholder="Gemini API Key" className="text-black text-xs p-2 rounded-md w-48 shadow-inner focus:ring-2 focus:ring-blue-500 outline-none" value={apiKey} onChange={(e)=>setApiKey(e.target.value)} />
                     </header>
 
-                    <nav className="flex bg-slate-50 border-b">
-                        <button onClick={()=>setActiveTab('matching')} className={`flex-1 py-4 font-bold transition-all ${activeTab==='matching' ? 'bg-white text-blue-600 border-b-4 border-blue-600' : 'text-slate-400 hover:text-slate-600'}`}>📅 スケジュール・依頼処理</button>
-                        <button onClick={()=>setActiveTab('ledger')} className={`flex-1 py-4 font-bold transition-all ${activeTab==='ledger' ? 'bg-white text-blue-600 border-b-4 border-blue-600' : 'text-slate-400 hover:text-slate-600'}`}>👥 台帳・シフト管理</button>
+                    <nav className="flex bg-slate-100 divide-x divide-slate-200">
+                        <button onClick={()=>setActiveTab('matching')} className={`flex-1 py-4 font-bold text-sm transition-all ${activeTab==='matching' ? 'bg-white text-blue-700 shadow-inner' : 'text-slate-500 hover:bg-slate-200'}`}>📅 マッチング (依頼・パズル)</button>
+                        <button onClick={()=>setActiveTab('ledger')} className={`flex-1 py-4 font-bold text-sm transition-all ${activeTab==='ledger' ? 'bg-white text-blue-700 shadow-inner' : 'text-slate-500 hover:bg-slate-200'}`}>👥 台帳管理 (利用者・ヘルパー・NG設定)</button>
                     </nav>
 
-                    <main className="p-8">
+                    <main className="p-6">
                         {activeTab === 'matching' ? (
-                            <div className="animate-fadeIn space-y-6">
-                                {/* 読込コントロールパネル */}
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50 p-6 rounded-2xl border border-slate-200 shadow-inner">
-                                    <div className="space-y-2">
-                                        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">1. 外部データの取り込み</h3>
-                                        <div className="flex gap-2">
-                                            <label className="flex-1 flex items-center justify-center gap-2 bg-indigo-600 text-white px-4 py-3 rounded-xl cursor-pointer hover:bg-indigo-700 shadow transition-all font-bold text-sm">
-                                                <span>📸 利用者依頼FAX 読込</span>
-                                                <input type="file" className="hidden" onChange={(e)=>handleAIUpload(e, 'request')} />
-                                            </label>
-                                            <label className="flex-1 flex items-center justify-center gap-2 bg-slate-700 text-white px-4 py-3 rounded-xl cursor-pointer hover:bg-slate-800 shadow transition-all font-bold text-sm text-center">
-                                                <span>📸 確定済予定表 読込</span>
-                                                <input type="file" className="hidden" onChange={(e)=>handleAIUpload(e, 'schedule')} />
-                                            </label>
-                                        </div>
+                            <div className="space-y-4">
+                                <div className="flex gap-4 items-end bg-blue-50 p-4 rounded-xl border border-blue-100 shadow-sm">
+                                    <div className="flex-1 space-y-1">
+                                        <p className="text-[10px] font-bold text-blue-600">Step 1: 依頼FAX・メールを読み込む</p>
+                                        <label className="flex items-center justify-center gap-2 bg-blue-600 text-white p-3 rounded-lg cursor-pointer hover:bg-blue-700 font-bold shadow-md transition-all active:scale-95">
+                                            <span>📸 利用者依頼を読込 & 自動割当</span>
+                                            <input type="file" className="hidden" onChange={(e)=>handleAIUpload(e, 'request')} />
+                                        </label>
                                     </div>
-                                    <div className="space-y-2 text-right">
-                                        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">2. 手動操作</h3>
-                                        <div className="flex justify-end gap-2">
-                                            <input type="month" className="border rounded-xl p-2.5 text-sm" onChange={(e)=>setViewDate(new Date(e.target.value))} />
-                                            <button onClick={()=>setSchedules([{date:'',time:'',helper:'',client:'',service:'移動支援'}, ...schedules])} className="bg-white text-blue-600 border-2 border-blue-600 px-6 py-2 rounded-xl font-black text-sm hover:bg-blue-50">＋ 予定追加</button>
-                                        </div>
-                                    </div>
+                                    <button onClick={()=>setSchedules([{date:'',time:'',helper:'',client:'',service:''}, ...schedules])} className="bg-white text-slate-600 border-2 border-slate-300 px-4 py-3 rounded-lg font-bold hover:bg-slate-50">＋ 1件追加</button>
                                 </div>
 
-                                {/* メインテーブル */}
-                                <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+                                <div className="border rounded-xl overflow-hidden shadow-sm">
                                     <table className="w-full text-sm">
                                         <thead className="bg-slate-800 text-white">
                                             <tr>
-                                                <th className="p-3 text-left w-32">日付</th>
-                                                <th className="p-3 text-left w-24">時間</th>
-                                                <th className="p-3 text-left">利用者</th>
-                                                <th className="p-3 text-left">サービス</th>
-                                                <th className="p-3 text-left">担当ヘルパー</th>
-                                                <th className="p-3 text-center">ステータス</th>
+                                                <th className="p-3 text-left">日付</th><th className="p-3 text-left">時間</th><th className="p-3 text-left">利用者</th><th className="p-3 text-left">サービス</th><th className="p-3 text-left">担当ヘルパー</th><th className="p-3 text-center">判定</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y">
                                             {schedules.map((s, i) => (
-                                                <tr key={i} className={`hover:bg-blue-50/50 ${!s.helper ? 'bg-orange-50/50' : ''}`}>
-                                                    <td className="p-2"><input type="date" value={s.date} className="w-full bg-transparent p-1" onChange={(e)=>{const n=[...schedules];n[i].date=e.target.value;setSchedules(n)}}/></td>
-                                                    <td className="p-2"><input type="time" value={s.time} className="w-full bg-transparent p-1" onChange={(e)=>{const n=[...schedules];n[i].time=e.target.value;setSchedules(n)}}/></td>
+                                                <tr key={i} className={`hover:bg-slate-50 ${checkAlert(s,i).includes('未割当') ? 'bg-orange-50' : ''}`}>
+                                                    <td className="p-2"><input type="date" value={s.date} className="w-full bg-transparent" onChange={(e)=>{const n=[...schedules];n[i].date=e.target.value;setSchedules(n)}}/></td>
+                                                    <td className="p-2"><input type="time" value={s.time} className="w-full bg-transparent" onChange={(e)=>{const n=[...schedules];n[i].time=e.target.value;setSchedules(n)}}/></td>
                                                     <td className="p-2">
-                                                        <select className="w-full bg-transparent p-1 border-b border-transparent focus:border-blue-400 outline-none" value={s.client} onChange={(e)=>{const n=[...schedules];n[i].client=e.target.value;setSchedules(n)}}>
+                                                        <select className="w-full bg-transparent border-b" value={s.client} onChange={(e)=>{const n=[...schedules];n[i].client=e.target.value;setSchedules(n)}}>
                                                             <option value="">利用者を選択</option>
                                                             {clients.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}
                                                         </select>
                                                     </td>
                                                     <td className="p-2">
-                                                        <select className="w-full bg-transparent p-1" value={s.service} onChange={(e)=>{const n=[...schedules];n[i].service=e.target.value;setSchedules(n)}}>
-                                                            <option value="移動支援">移動支援</option><option value="行動援護">行動援護</option><option value="重度訪問">重度訪問</option><option value="居宅介護">居宅介護</option>
-                                                        </select>
+                                                        <input list="services" className="w-full bg-transparent border-b" value={s.service} onChange={(e)=>{const n=[...schedules];n[i].service=e.target.value;setSchedules(n)}} />
+                                                        <datalist id="services"><option value="移動支援"/><option value="行動援護"/><option value="重度訪問"/><option value="居宅介護"/></datalist>
                                                     </td>
                                                     <td className="p-2">
-                                                        <select className={`w-full p-1 rounded font-bold ${!s.helper ? 'text-orange-600 bg-orange-100' : 'text-slate-700'}`} value={s.helper} onChange={(e)=>{const n=[...schedules];n[i].helper=e.target.value;setSchedules(n)}}>
-                                                            <option value="">未割当 (ヘルパー選択)</option>
+                                                        <select className={`w-full p-1 rounded font-bold ${!s.helper ? 'text-orange-600 bg-orange-100 animate-pulse' : 'text-slate-800'}`} value={s.helper} onChange={(e)=>{const n=[...schedules];n[i].helper=e.target.value;setSchedules(n)}}>
+                                                            <option value="">▼ 割当を選択</option>
                                                             {helpers.map(h=><option key={h.id} value={h.name}>{h.name} ({h.type})</option>)}
                                                         </select>
                                                     </td>
                                                     <td className="p-2 text-center">
-                                                        {checkAlert(s,i).map(a=><span key={a} className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-black mr-1 ${a==='未割当' ? 'bg-orange-200 text-orange-800' : 'bg-red-200 text-red-800'}`}>{a}</span>)}
-                                                        {checkAlert(s,i).length === 0 && <span className="text-emerald-500 font-bold text-xs">● 確定</span>}
+                                                        <div className="flex flex-col gap-1 items-center">
+                                                            {checkAlert(s,i).map(a=><span key={a} className="px-2 py-0.5 rounded-full text-[9px] font-black bg-red-100 text-red-700">{a}</span>)}
+                                                            {checkAlert(s,i).length === 0 && <span className="text-emerald-500 font-bold text-xs">OK</span>}
+                                                        </div>
                                                     </td>
                                                 </tr>
                                             ))}
@@ -192,39 +166,61 @@
                                 </div>
                             </div>
                         ) : (
-                            /* 台帳タブ (前回と同様のUI) */
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-10 animate-fadeIn">
-                                <div className="space-y-4">
-                                    <h3 className="text-lg font-black text-slate-700 border-b pb-2 flex justify-between">
-                                        <span>🏠 利用者台帳</span>
-                                        <label className="text-[10px] bg-emerald-600 text-white px-2 py-1 rounded cursor-pointer font-bold">📸 AI名簿読込<input type="file" className="hidden" onChange={(e)=>handleAIUpload(e, 'client_list')} /></label>
-                                    </h3>
-                                    <input type="file" accept=".csv" onChange={handleCSVUpload} className="text-xs w-full p-2 bg-slate-50 border border-dashed rounded-lg mb-4" />
-                                    <div className="h-[450px] overflow-y-auto space-y-2">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 animate-fadeIn">
+                                {/* 利用者管理 */}
+                                <div className="space-y-4 bg-white p-4 rounded-xl border">
+                                    <div className="flex justify-between items-center border-b pb-2">
+                                        <h3 className="font-black text-slate-700">🏠 利用者リスト</h3>
+                                        <button onClick={()=>setClients([{id:Date.now(), name:''}, ...clients])} className="text-xs bg-slate-800 text-white px-3 py-1 rounded">＋ 追加</button>
+                                    </div>
+                                    <div className="h-96 overflow-y-auto space-y-2">
                                         {clients.map(c => (
-                                            <input key={c.id} className="w-full p-2 border rounded-lg text-sm shadow-sm" value={c.name} onChange={(e)=>{const n=[...clients]; n.find(x=>x.id===c.id).name=e.target.value; setClients(n)}} />
+                                            <div key={c.id} className="flex gap-2 items-center group">
+                                                <input className="flex-1 p-2 border rounded-md text-sm hover:border-blue-400" value={c.name} onChange={(e)=>{const n=[...clients]; n.find(x=>x.id===c.id).name=e.target.value; setClients(n)}} placeholder="氏名を入力..." />
+                                                <button onClick={()=>setClients(clients.filter(x=>x.id!==c.id))} className="text-slate-300 hover:text-red-500">✕</button>
+                                            </div>
                                         ))}
                                     </div>
                                 </div>
-                                <div className="space-y-4">
-                                    <h3 className="text-lg font-black text-slate-700 border-b pb-2 flex justify-between">
-                                        <span>👤 ヘルパー管理</span>
-                                        <label className="text-[10px] bg-orange-500 text-white px-2 py-1 rounded cursor-pointer font-bold">📸 AIシフト読込<input type="file" className="hidden" onChange={(e)=>handleAIUpload(e, 'helper_shift')} /></label>
-                                    </h3>
-                                    <div className="h-[500px] overflow-y-auto space-y-4">
+
+                                {/* ヘルパー管理 */}
+                                <div className="space-y-4 bg-white p-4 rounded-xl border">
+                                    <div className="flex justify-between items-center border-b pb-2">
+                                        <h3 className="font-black text-slate-700">👤 ヘルパー & 稼働 & 相性</h3>
+                                        <button onClick={()=>setHelpers([{id:Date.now(), name:'', type:'非常勤', services:[], shiftMemo:'', ngClients:''}, ...helpers])} className="text-xs bg-slate-800 text-white px-3 py-1 rounded">＋ 追加</button>
+                                    </div>
+                                    <label className="block bg-orange-500 text-white text-center py-2 rounded-lg cursor-pointer hover:bg-orange-600 font-bold text-xs shadow">
+                                        📸 ヘルパー稼働連絡(FAX/メール)を読込
+                                        <input type="file" className="hidden" onChange={(e)=>handleAIUpload(e, 'helper_shift')} />
+                                    </label>
+                                    <div className="h-96 overflow-y-auto space-y-4">
                                         {helpers.map(h => (
-                                            <div key={h.id} className="p-4 bg-white border rounded-xl shadow-sm relative">
-                                                <input className="font-bold border-b w-full mb-2" value={h.name} onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).name=e.target.value; setHelpers(n)}} />
-                                                <div className="flex gap-2 text-[10px] mb-2">
-                                                    {["移動支援","行動援護","重度訪問","居宅介護"].map(svc => (
-                                                        <label key={svc}><input type="checkbox" checked={h.services.includes(svc)} onChange={(e)=>{
-                                                            const n=[...helpers]; const t=n.find(x=>x.id===h.id);
-                                                            t.services = e.target.checked ? [...t.services, svc] : t.services.filter(s=>s!==svc);
-                                                            setHelpers(n);
-                                                        }} /> {svc}</label>
-                                                    ))}
+                                            <div key={h.id} className="p-4 bg-slate-50 rounded-xl border hover:shadow-md transition-all relative group">
+                                                <button onClick={()=>setHelpers(helpers.filter(x=>x.id!==h.id))} className="absolute top-2 right-2 text-slate-300 hover:text-red-500 text-xs">削除</button>
+                                                <div className="flex gap-2 mb-2">
+                                                    <input className="font-bold border-b-2 border-transparent focus:border-blue-500 bg-transparent w-full outline-none" value={h.name} placeholder="ヘルパー氏名" onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).name=e.target.value; setHelpers(n)}} />
+                                                    <select className="text-xs bg-white border rounded" value={h.type} onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).type=e.target.value; setHelpers(n)}}>
+                                                        <option value="常勤">常勤</option><option value="非常勤">非常勤</option>
+                                                    </select>
                                                 </div>
-                                                <textarea className="w-full text-[10px] p-2 bg-slate-50 rounded" value={h.shiftMemo} placeholder="シフトメモ" onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).shiftMemo=e.target.value; setHelpers(n)}} />
+                                                <div className="space-y-2">
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {["移動支援","行動援護","重度訪問","居宅介護"].map(svc => (
+                                                            <label key={svc} className="text-[9px] bg-white border px-1 rounded flex items-center gap-1">
+                                                                <input type="checkbox" checked={h.services.includes(svc)} onChange={(e)=>{
+                                                                    const n=[...helpers]; const t=n.find(x=>x.id===h.id);
+                                                                    t.services = e.target.checked ? [...t.services, svc] : t.services.filter(s=>s!==svc);
+                                                                    setHelpers(n);
+                                                                }} /> {svc}
+                                                            </label>
+                                                        ))}
+                                                    </div>
+                                                    <textarea className="w-full text-[10px] p-2 bg-white rounded border-none shadow-sm" rows="2" placeholder="稼働日メモ (AIが自動入力します)" value={h.shiftMemo} onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).shiftMemo=e.target.value; setHelpers(n)}} />
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-[10px] font-bold text-red-500">組合せNG:</span>
+                                                        <input className="flex-1 text-[10px] p-1 border-b bg-transparent outline-none focus:border-red-400" placeholder="利用者名を記入 (例: 山田, 佐藤)" value={h.ngClients} onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).ngClients=e.target.value; setHelpers(n)}} />
+                                                    </div>
+                                                </div>
                                             </div>
                                         ))}
                                     </div>
@@ -234,11 +230,11 @@
                     </main>
 
                     {isAnalyzing && (
-                        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center z-50">
-                            <div className="bg-white p-8 rounded-3xl shadow-2xl text-center space-y-4 border-t-8 border-indigo-600">
-                                <div className="w-16 h-16 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
-                                <p className="text-xl font-black text-slate-800 tracking-tighter">AIがFAX/メールをデータ化中...</p>
-                                <p className="text-xs text-slate-400">数秒で終わります。そのままお待ちください。</p>
+                        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-md flex items-center justify-center z-50">
+                            <div className="bg-white p-10 rounded-3xl shadow-2xl text-center space-y-6 border-b-8 border-blue-600 animate-pulse">
+                                <div className="w-20 h-20 border-8 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
+                                <h2 className="text-2xl font-black text-slate-800">AIマッチング中...</h2>
+                                <p className="text-sm text-slate-500 font-bold">稼働日とNG設定を確認しながら<br/>最適なヘルパーを選んでいます。</p>
                             </div>
                         </div>
                     )}
@@ -250,8 +246,8 @@
         root.render(<App />);
     </script>
     <style>
-        @keyframes fadeIn { from { opacity: 0; transform: scale(0.98); } to { opacity: 1; transform: scale(1); } }
-        .animate-fadeIn { animation: fadeIn 0.3s ease-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fadeIn { animation: fadeIn 0.4s ease-out; }
     </style>
 </body>
 </html>
