@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>介護マッチング AI v5.7</title>
+    <title>介護マッチング AI v5.8</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -29,16 +29,16 @@
                 reader.onload = async () => {
                     const base64Data = reader.result.split(',')[1];
                     
-                    // スクリーンショット(74)で「Try it」と出ていた最新・軽量モデルを指定
-                    const modelName = "gemini-3-flash";
+                    // スクリーンショット(74)の公式コード例に記載されているモデル名を使用
+                    const modelName = "gemini-3-pro-preview";
                     
                     try {
-                        // 最新の通信ルール（v1beta）を使用
-                        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`, {
+                        // 通信URLを最新の /v1/ に固定
+                        const res = await fetch(`https://generativelanguage.googleapis.com/v1/models/${modelName}:generateContent?key=${apiKey}`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ contents: [{ parts: [
-                                { text: "画像から介護依頼（日付、時間、利用者名、サービス内容）を抜き出し、以下のJSON形式で返してください。 [ { \"date\": \"YYYY-MM-DD\", \"time\": \"HH:MM\", \"client\": \"...\", \"service\": \"...\" } ]" }, 
+                                { text: "画像から介護依頼(日付、時間、利用者名、サービス内容)を抽出し、以下のJSON形式で返して。余計な説明は不要。 [ { \"date\": \"YYYY-MM-DD\", \"time\": \"HH:MM\", \"client\": \"...\", \"service\": \"...\" } ]" }, 
                                 { inline_data: { mime_type: file.type, data: base64Data } }
                             ] }] })
                         });
@@ -54,10 +54,10 @@
                             setSchedules([...(Array.isArray(result) ? result : [result]), ...schedules]);
                             alert("AIがデータを読み込みました！");
                         } else {
-                            alert("AIは画像を読みましたが、表の形式に整理できませんでした。");
+                            alert("AIは画像を見ましたが、文字をうまく整理できませんでした。");
                         }
                     } catch (err) {
-                        alert("読み込みエラー: " + err.message + "\n\n※1分待ってから、もう一度だけ試してみてください。");
+                        alert("読み込みエラー: " + err.message + "\n\n※このエラーが出る場合は1分待ってからもう一度試してください。");
                     }
                     setIsAnalyzing(false);
                 };
@@ -66,12 +66,12 @@
             return (
                 <div className="max-w-4xl mx-auto my-5 bg-white shadow-xl rounded-xl border overflow-hidden">
                     <header className="bg-slate-800 text-white p-4 flex justify-between items-center">
-                        <h1 className="font-bold">CARE MATCH v5.7</h1>
-                        <input type="password" placeholder="APIキーを入力" className="text-black text-xs p-2 rounded w-48 shadow-inner" value={apiKey} onChange={(e)=>{setApiKey(e.target.value); localStorage.setItem('gemini_api_key', e.target.value)}} />
+                        <h1 className="font-bold">CARE MATCH v5.8</h1>
+                        <input type="password" placeholder="APIキーを入力" className="text-black text-xs p-2 rounded w-48 shadow-inner focus:ring-2 focus:ring-blue-500 outline-none" value={apiKey} onChange={(e)=>{setApiKey(e.target.value); localStorage.setItem('gemini_api_key', e.target.value)}} />
                     </header>
-                    <nav className="flex bg-slate-100 border-b font-bold">
-                        <button onClick={()=>setActiveTab('matching')} className={`flex-1 p-4 ${activeTab==='matching'?'bg-white text-blue-600 border-b-4 border-blue-600':''}`}>📅 依頼管理</button>
-                        <button onClick={()=>setActiveTab('ledger')} className={`flex-1 p-4 ${activeTab==='ledger'?'bg-white text-blue-600 border-b-4 border-blue-600':''}`}>👥 ヘルパー台帳</button>
+                    <nav className="flex bg-slate-100 border-b">
+                        <button onClick={()=>setActiveTab('matching')} className={`flex-1 p-4 font-bold ${activeTab==='matching'?'bg-white text-blue-600 border-b-4 border-blue-600':'text-slate-500'}`}>📅 依頼管理</button>
+                        <button onClick={()=>setActiveTab('ledger')} className={`flex-1 p-4 font-bold ${activeTab==='ledger'?'bg-white text-blue-600 border-b-4 border-blue-600':'text-slate-500'}`}>👥 ヘルパー台帳</button>
                     </nav>
                     <main className="p-4 min-h-[400px]">
                         {activeTab === 'matching' ? (
@@ -86,22 +86,22 @@
                                 <div className="border rounded-xl overflow-hidden shadow-sm bg-white">
                                     <table className="w-full text-sm">
                                         <thead className="bg-slate-800 text-white">
-                                            <tr><th className="p-2 text-left">日付</th><th className="p-2 text-left">時間</th><th className="p-2 text-left">利用者</th><th className="p-2 text-left">内容</th><th className="p-2 text-left">担当</th><th className="p-2"></th></tr>
+                                            <tr><th className="p-2 text-left">日付</th><th className="p-2 text-left">時間</th><th className="p-2 text-left">利用者</th><th className="p-2 text-left">内容</th><th className="p-2 text-left">担当</th><th className="p-2 w-10"></th></tr>
                                         </thead>
                                         <tbody>
                                             {schedules.map((s, i) => (
                                                 <tr key={i} className="border-b hover:bg-blue-50/30">
                                                     <td className="p-1"><input type="date" className="w-full p-1" value={s.date} onChange={(e)=>{const n=[...schedules]; n[i].date=e.target.value; setSchedules(n)}}/></td>
                                                     <td className="p-1"><input type="time" className="w-full p-1" value={s.time} onChange={(e)=>{const n=[...schedules]; n[i].time=e.target.value; setSchedules(n)}}/></td>
-                                                    <td className="p-1"><input className="w-full p-1" value={s.client} onChange={(e)=>{const n=[...schedules]; n[i].client=e.target.value; setSchedules(n)}}/></td>
-                                                    <td className="p-1"><input className="w-full p-1" value={s.service} onChange={(e)=>{const n=[...schedules]; n[i].service=e.target.value; setSchedules(n)}}/></td>
+                                                    <td className="p-1"><input className="w-full p-1 border-b border-transparent focus:border-blue-400 outline-none" value={s.client} onChange={(e)=>{const n=[...schedules]; n[i].client=e.target.value; setSchedules(n)}}/></td>
+                                                    <td className="p-1"><input className="w-full p-1 border-b border-transparent focus:border-blue-400 outline-none" value={s.service} onChange={(e)=>{const n=[...schedules]; n[i].service=e.target.value; setSchedules(n)}}/></td>
                                                     <td className="p-1">
                                                         <select className="w-full font-bold text-blue-600" value={s.helper} onChange={(e)=>{const n=[...schedules]; n[i].helper=e.target.value; setSchedules(n)}}>
                                                             <option value="">未選択</option>
                                                             {helpers.map(h=><option key={h.id} value={h.name}>{h.name}</option>)}
                                                         </select>
                                                     </td>
-                                                    <td className="p-1 text-center"><button onClick={()=>setSchedules(schedules.filter((_,idx)=>idx!==i))} className="text-slate-300 hover:text-red-500">🗑️</button></td>
+                                                    <td className="p-1 text-center"><button onClick={()=>setSchedules(schedules.filter((_,idx)=>idx!==i))} className="text-slate-300 hover:text-red-500 text-lg">🗑️</button></td>
                                                 </tr>
                                             ))}
                                         </tbody>
@@ -113,11 +113,11 @@
                                 <button onClick={()=>setHelpers([{id:Date.now(), name:'', ngClients:''}, ...helpers])} className="w-full p-4 bg-slate-800 text-white rounded-xl font-bold shadow-md">+ ヘルパー新規追加</button>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     {helpers.map(h => (
-                                        <div key={h.id} className="p-4 border-2 rounded-2xl relative space-y-3 bg-white shadow-sm hover:border-blue-200">
+                                        <div key={h.id} className="p-4 border-2 rounded-2xl relative bg-white shadow-sm">
                                             <button onClick={()=>setHelpers(helpers.filter(x=>x.id!==h.id))} className="absolute top-3 right-3 text-slate-300 hover:text-red-500 font-bold">削除✕</button>
-                                            <input className="font-bold border-b-2 w-full text-lg outline-none focus:border-blue-400 px-1" value={h.name} placeholder="ヘルパー氏名" onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).name=e.target.value; setHelpers(n)}} />
-                                            <label className="text-[10px] text-red-400 font-bold block">NGな利用者</label>
-                                            <input className="w-full text-xs border p-2 rounded bg-red-50/30" value={h.ngClients} placeholder="例：田中, 佐藤" onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).ngClients=e.target.value; setHelpers(n)}} />
+                                            <input className="font-bold border-b-2 w-full text-lg outline-none focus:border-blue-400 px-1 mb-2" value={h.name} placeholder="ヘルパー氏名" onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).name=e.target.value; setHelpers(n)}} />
+                                            <label className="text-[10px] text-red-400 font-bold block mb-1">NGな利用者</label>
+                                            <input className="w-full text-xs border p-2 rounded bg-red-50/20" value={h.ngClients} placeholder="例：田中, 佐藤" onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).ngClients=e.target.value; setHelpers(n)}} />
                                         </div>
                                     ))}
                                 </div>
@@ -126,9 +126,9 @@
                     </main>
                     {isAnalyzing && (
                         <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-sm flex items-center justify-center z-50">
-                            <div className="bg-white p-10 rounded-3xl text-center space-y-4 shadow-2xl border-t-8 border-blue-600 animate-pulse">
+                            <div className="bg-white p-10 rounded-3xl text-center space-y-4 shadow-2xl border-t-8 border-blue-600 animate-bounce">
                                 <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
-                                <p className="font-bold text-lg tracking-tight text-slate-700">最新AI (Gemini 3) が解析中...</p>
+                                <p className="font-bold text-lg text-slate-700">Gemini 3 が解析中です...</p>
                             </div>
                         </div>
                     )}
