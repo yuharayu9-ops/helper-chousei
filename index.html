@@ -3,171 +3,206 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>介護マッチング AI v6.5 (AI Studio再現版)</title>
+    <title>介護マッチング AI v6.6</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
-<body class="bg-slate-50">
+<body class="bg-slate-50 text-slate-900 font-sans">
     <div id="root"></div>
     <script type="text/babel">
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useMemo } = React;
 
         function App() {
-            // データの読み込み
-            const [helpers, setHelpers] = useState(() => JSON.parse(localStorage.getItem('cm_helpers_final') || '[]'));
-            const [schedules, setSchedules] = useState(() => JSON.parse(localStorage.getItem('cm_schedules_final') || '[]'));
-            const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key_final') || '');
+            // --- 状態管理 (データ保存) ---
+            const [helpers, setHelpers] = useState(() => JSON.parse(localStorage.getItem('cm_master_helpers') || '[]'));
+            const [schedules, setSchedules] = useState(() => JSON.parse(localStorage.getItem('cm_monthly_schedules') || '[]'));
+            const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key_v6') || '');
             const [activeTab, setActiveTab] = useState('matching');
             const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-            // データの保存（入力するたびに即座に保存）
-            useEffect(() => { localStorage.setItem('cm_helpers_final', JSON.stringify(helpers)); }, [helpers]);
-            useEffect(() => { localStorage.setItem('cm_schedules_final', JSON.stringify(schedules)); }, [schedules]);
-            useEffect(() => { localStorage.setItem('gemini_api_key_final', apiKey); }, [apiKey]);
+            useEffect(() => { localStorage.setItem('cm_master_helpers', JSON.stringify(helpers)); }, [helpers]);
+            useEffect(() => { localStorage.setItem('cm_monthly_schedules', JSON.stringify(schedules)); }, [schedules]);
+            useEffect(() => { localStorage.setItem('gemini_api_key_v6', apiKey); }, [apiKey]);
 
-            const handleFileUpload = async (e) => {
+            // --- 警告ロジック (ダブルブッキング等) ---
+            const warnings = useMemo(() => {
+                const results = [];
+                schedules.forEach((s1, i) => {
+                    if (!s1.helper || !s1.date || !s1.time) return;
+                    // ダブルブッキングチェック
+                    const conflict = schedules.find((s2, j) => 
+                        i !== j && s1.helper === s2.helper && s1.date === s2.date && s1.time === s2.time
+                    );
+                    if (conflict) results.push({ index: i, type: 'double', msg: '⚠️ 重複' });
+                    
+                    // NGチェック
+                    const helper = helpers.find(h => h.name === s1.helper);
+                    if (helper && helper.ngClients && s1.client && helper.ngClients.includes(s1.client)) {
+                        results.push({ index: i, type: 'ng', msg: '❌ NG組合せ' });
+                    }
+                });
+                return results;
+            }, [schedules, helpers]);
+
+            // --- AI Studio 再現読み取り ---
+            const handleAIRead = async (e) => {
                 const file = e.target.files[0];
                 if (!file || !apiKey) { alert("APIキーを入力してください"); return; }
                 setIsAnalyzing(true);
-
+                
                 const reader = new FileReader();
                 reader.readAsDataURL(file);
                 reader.onload = async () => {
                     const base64Data = reader.result.split(',')[1];
-                    
-                    // AI Studio(スクリーンショット74)で使用されていた最新のモデル名を使用
-                    const modelName = "gemini-3-pro-preview";
-                    
                     try {
-                        // AI Studioと同じ「v1beta」エンドポイントを使用
-                        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`, {
+                        // AI Studioと同じ v1beta / gemini-1.5-flash (または pro) を使用
+                        const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
-                                contents: [{
-                                    parts: [
-                                        { text: "介護依頼書を解析し、[{\"date\":\"YYYY-MM-DD\", \"time\":\"HH:MM\", \"client\":\"...\", \"service\":\"...\"}] の形式のJSON配列のみを返してください。余計な文章は一切不要です。" },
-                                        { inline_data: { mime_type: file.type, data: base64Data } }
-                                    ]
-                                }],
-                                generationConfig: { temperature: 0.1 } // 精度を上げる設定
+                                contents: [{ parts: [
+                                    { text: "介護依頼書を解析し、[{\"date\":\"YYYY-MM-DD\", \"time\":\"HH:MM\", \"client\":\"...\", \"service\":\"...\"}] の形式のJSON配列のみを返してください。不要な説明は一切禁止。" }, 
+                                    { inline_data: { mime_type: file.type, data: base64Data } }
+                                ]}],
+                                generationConfig: { temperature: 0.1 }
                             })
                         });
-
                         const data = await res.json();
-                        
-                        if (data.error) {
-                            throw new Error(`${data.error.status}: ${data.error.message}`);
-                        }
-
-                        if (data.candidates && data.candidates[0].content.parts[0].text) {
-                            const text = data.candidates[0].content.parts[0].text;
-                            const jsonMatch = text.match(/\[[\s\S]*\]/);
-                            if (jsonMatch) {
-                                const result = JSON.parse(jsonMatch[0]);
-                                setSchedules(prev => [...result, ...prev]);
-                                alert(result.length + "件の読み込みに成功しました！");
-                            }
-                        }
+                        if (data.error) throw new Error(data.error.message);
+                        const text = data.candidates[0].content.parts[0].text;
+                        const json = JSON.parse(text.match(/\[[\s\S]*\]/)[0]);
+                        setSchedules(prev => [...json, ...prev]);
+                        alert(json.length + "件の依頼を読み込みました。");
                     } catch (err) {
-                        console.error(err);
-                        alert("AI Studioとの接続に失敗しました。\n理由: " + err.message + "\n\n※1分待ってもダメな場合、APIキーにGemini 3の利用権限があるか確認してください。");
+                        alert("AI Studioとの通信に失敗しました。1分待って再試行してください。\nエラー: " + err.message);
                     }
                     setIsAnalyzing(false);
                 };
             };
 
+            // --- CSVインポート (名前のみ対応) ---
+            const handleCSV = (e) => {
+                const file = e.target.files[0];
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const names = event.target.result.split(/\r?\n/).filter(line => line.trim());
+                    const newHelpers = names.map(name => ({ id: Date.now() + Math.random(), name: name.replace(/"/g, ''), ngClients: '' }));
+                    setHelpers([...newHelpers, ...helpers]);
+                    alert(newHelpers.length + "名のヘルパーを登録しました。");
+                };
+                reader.readAsText(file, "Shift_JIS");
+            };
+
             return (
-                <div className="max-w-5xl mx-auto my-5 bg-white shadow-2xl rounded-2xl overflow-hidden border">
-                    <header className="bg-slate-900 text-white p-5 flex justify-between items-center">
+                <div className="max-w-6xl mx-auto my-5 bg-white shadow-2xl rounded-2xl overflow-hidden border border-slate-200">
+                    <header className="bg-slate-900 text-white p-5 flex justify-between items-center border-b-4 border-blue-500">
                         <div>
-                            <h1 className="text-xl font-bold tracking-tight text-blue-400">CARE MATCH PRO</h1>
-                            <p className="text-[10px] text-slate-400">AI Studio 連携モード v6.5</p>
+                            <h1 className="text-xl font-black tracking-tighter">CARE MATCH v6.6</h1>
+                            <p className="text-[10px] text-blue-400 font-bold uppercase">AI Studio Engine & Safety Logic</p>
                         </div>
-                        <input type="password" placeholder="Google API Key" className="bg-slate-800 text-white text-xs p-2 rounded-lg border border-slate-700 w-64 focus:ring-2 focus:ring-blue-500 outline-none" value={apiKey} onChange={(e)=>setApiKey(e.target.value)} />
+                        <div className="flex items-center gap-3">
+                            <input type="password" placeholder="API Key" className="bg-slate-800 text-xs p-2 rounded border border-slate-700 w-48 outline-none focus:ring-1 focus:ring-blue-500" value={apiKey} onChange={(e)=>setApiKey(e.target.value)} />
+                        </div>
                     </header>
-                    
+
                     <nav className="flex bg-slate-50 border-b">
-                        <button onClick={()=>setActiveTab('matching')} className={`flex-1 p-4 font-bold transition-all ${activeTab==='matching'?'bg-white text-blue-600 border-b-4 border-blue-600 shadow-inner':'text-slate-400'}`}>📅 依頼一括読込</button>
-                        <button onClick={()=>setActiveTab('ledger')} className={`flex-1 p-4 font-bold transition-all ${activeTab==='ledger'?'bg-white text-blue-600 border-b-4 border-blue-600 shadow-inner':'text-slate-400'}`}>👥 ヘルパー台帳 ({helpers.length})</button>
+                        <button onClick={()=>setActiveTab('matching')} className={`flex-1 p-4 font-bold ${activeTab==='matching'?'bg-white text-blue-600 border-b-4 border-blue-600 shadow-inner':'text-slate-400'}`}>📅 依頼読込・マッチング</button>
+                        <button onClick={()=>setActiveTab('ledger')} className={`flex-1 p-4 font-bold ${activeTab==='ledger'?'bg-white text-blue-600 border-b-4 border-blue-600 shadow-inner':'text-slate-400'}`}>👥 台帳管理 ({helpers.length}名)</button>
                     </nav>
 
-                    <main className="p-6">
+                    <main className="p-6 min-h-[600px]">
                         {activeTab === 'matching' ? (
-                            <div className="space-y-6">
-                                <div className="grid grid-cols-2 gap-4">
-                                    <label className="flex flex-col items-center justify-center bg-blue-50 border-2 border-dashed border-blue-200 p-8 rounded-3xl cursor-pointer hover:bg-blue-100 transition-all group">
-                                        <span className="text-3xl mb-2 group-hover:scale-110 transition-transform">📄</span>
-                                        <span className="font-bold text-blue-700">PDF / 画像を選択</span>
-                                        <input type="file" className="hidden" accept="application/pdf,image/*" onChange={handleFileUpload} />
+                            <div className="space-y-4">
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <label className="md:col-span-2 flex flex-col items-center justify-center bg-blue-600 text-white p-6 rounded-3xl cursor-pointer hover:bg-blue-700 shadow-lg transition-all active:scale-95">
+                                        <span className="text-2xl mb-1">📁</span>
+                                        <span className="font-bold">PDF/画像から一括読み込み</span>
+                                        <input type="file" className="hidden" accept="application/pdf,image/*" onChange={handleAIRead} />
                                     </label>
-                                    <button onClick={()=>setSchedules([{date:'', time:'', client:'', service:'', helper:''}, ...schedules])} className="flex flex-col items-center justify-center bg-slate-800 text-white p-8 rounded-3xl font-bold hover:bg-slate-900 shadow-lg active:scale-95 transition-all">
-                                        <span className="text-3xl mb-2">➕</span>
-                                        <span>手動で1件追加</span>
+                                    <button onClick={()=>setSchedules([{id:Date.now(), date:'', time:'', client:'', service:'', helper:''}, ...schedules])} className="bg-slate-800 text-white p-6 rounded-3xl font-bold hover:bg-slate-900 shadow-md">
+                                        ➕ 手動で1件追加
                                     </button>
                                 </div>
 
-                                <div className="border rounded-2xl overflow-hidden shadow-sm">
+                                <div className="border rounded-2xl overflow-hidden bg-white shadow-sm overflow-x-auto">
                                     <table className="w-full text-sm">
                                         <thead className="bg-slate-900 text-white">
                                             <tr>
                                                 <th className="p-3 border-r border-slate-700">日時</th>
                                                 <th className="p-3 border-r border-slate-700">利用者名</th>
-                                                <th className="p-3 border-r border-slate-700">サービス内容</th>
+                                                <th className="p-3 border-r border-slate-700">内容</th>
                                                 <th className="p-3 text-blue-400">担当ヘルパー</th>
                                                 <th className="p-3"></th>
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {schedules.map((s, i) => (
-                                                <tr key={i} className="border-b hover:bg-blue-50/30">
-                                                    <td className="p-2 border-r"><input type="date" className="block w-full text-xs" value={s.date} onChange={(e)=>{const n=[...schedules]; n[i].date=e.target.value; setSchedules(n)}}/><input type="time" className="block w-full text-xs mt-1" value={s.time} onChange={(e)=>{const n=[...schedules]; n[i].time=e.target.value; setSchedules(n)}}/></td>
-                                                    <td className="p-2 border-r"><input className="w-full font-bold p-1 bg-transparent border-b border-transparent focus:border-blue-400 outline-none" value={s.client} onChange={(e)=>{const n=[...schedules]; n[i].client=e.target.value; setSchedules(n)}}/></td>
-                                                    <td className="p-2 border-r"><input className="w-full p-1 bg-transparent border-b border-transparent focus:border-blue-400 outline-none" value={s.service} onChange={(e)=>{const n=[...schedules]; n[i].service=e.target.value; setSchedules(n)}}/></td>
-                                                    <td className="p-2 border-r">
-                                                        <select className="w-full p-2 font-bold text-blue-600 rounded border border-transparent hover:border-blue-200" value={s.helper} onChange={(e)=>{const n=[...schedules]; n[i].helper=e.target.value; setSchedules(n)}}>
-                                                            <option value="">▼ 未選択</option>
-                                                            {helpers.map(h=><option key={h.id} value={h.name}>{h.name}</option>)}
-                                                        </select>
-                                                    </td>
-                                                    <td className="p-2 text-center"><button onClick={()=>setSchedules(schedules.filter((_,idx)=>idx!==i))} className="text-slate-300 hover:text-red-500">✕</button></td>
-                                                </tr>
-                                            ))}
+                                            {schedules.map((s, i) => {
+                                                const hasWarning = warnings.find(w => w.index === i);
+                                                return (
+                                                    <tr key={i} className={`border-b ${hasWarning ? 'bg-red-50' : 'hover:bg-blue-50/30'}`}>
+                                                        <td className="p-2 border-r">
+                                                            <input type="date" className="block w-full text-xs" value={s.date} onChange={(e)=>{const n=[...schedules]; n[i].date=e.target.value; setSchedules(n)}}/>
+                                                            <input type="time" className="block w-full text-xs mt-1" value={s.time} onChange={(e)=>{const n=[...schedules]; n[i].time=e.target.value; setSchedules(n)}}/>
+                                                        </td>
+                                                        <td className="p-2 border-r"><input className="w-full font-bold p-1 bg-transparent border-b border-transparent focus:border-blue-400 outline-none" value={s.client} placeholder="利用者" onChange={(e)=>{const n=[...schedules]; n[i].client=e.target.value; setSchedules(n)}}/></td>
+                                                        <td className="p-2 border-r"><input className="w-full p-1 bg-transparent border-b border-transparent focus:border-blue-400 outline-none" value={s.service} placeholder="掃除・入浴等" onChange={(e)=>{const n=[...schedules]; n[i].service=e.target.value; setSchedules(n)}}/></td>
+                                                        <td className="p-2 border-r relative">
+                                                            <select className="w-full p-2 font-bold text-blue-600 rounded bg-transparent" value={s.helper} onChange={(e)=>{const n=[...schedules]; n[i].helper=e.target.value; setSchedules(n)}}>
+                                                                <option value="">▼ 未選択</option>
+                                                                {helpers.map(h=><option key={h.id} value={h.name}>{h.name}</option>)}
+                                                            </select>
+                                                            {hasWarning && <span className="absolute -top-1 right-1 text-[10px] bg-red-600 text-white px-1 rounded font-bold animate-pulse">{hasWarning.msg}</span>}
+                                                        </td>
+                                                        <td className="p-2 text-center"><button onClick={()=>setSchedules(schedules.filter((_,idx)=>idx!==i))} className="text-slate-300 hover:text-red-500 font-bold">✕</button></td>
+                                                    </tr>
+                                                );
+                                            })}
                                         </tbody>
                                     </table>
                                 </div>
+                                <div className="flex justify-between">
+                                    <button onClick={()=>{if(confirm('クリアしますか？'))setSchedules([])}} className="text-xs text-red-500 underline px-2">全依頼を削除</button>
+                                    <p className="text-[10px] text-slate-400">※データはブラウザに自動保存されています</p>
+                                </div>
                             </div>
                         ) : (
-                            <div className="space-y-4">
-                                <button onClick={()=>setHelpers([{id:Date.now(), name:'', ngClients:''}, ...helpers])} className="w-full p-4 bg-blue-600 text-white rounded-2xl font-bold shadow-lg hover:bg-blue-700 transition-all">+ 新しいヘルパーを登録</button>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-6">
+                                <div className="grid grid-cols-2 gap-4">
+                                    <button onClick={()=>setHelpers([{id:Date.now(), name:'', ngClients:''}, ...helpers])} className="p-4 bg-slate-800 text-white rounded-2xl font-bold shadow-lg hover:bg-slate-900">+ 手動でヘルパー登録</button>
+                                    <label className="p-4 bg-emerald-600 text-white rounded-2xl font-bold shadow-lg hover:bg-emerald-700 text-center cursor-pointer">
+                                        📥 CSVから名前を一括登録
+                                        <input type="file" className="hidden" accept=".csv" onChange={handleCSV} />
+                                    </label>
+                                </div>
+                                
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                                     {helpers.map(h => (
-                                        <div key={h.id} className="p-5 border-2 border-slate-100 rounded-3xl bg-white shadow-sm relative group hover:border-blue-300 transition-all">
-                                            <button onClick={()=>setHelpers(helpers.filter(x=>x.id!==h.id))} className="absolute top-4 right-4 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all font-bold">削除✕</button>
+                                        <div key={h.id} className="p-4 border-2 border-slate-100 rounded-3xl bg-white shadow-sm relative group hover:border-blue-300 transition-all">
+                                            <button onClick={()=>setHelpers(helpers.filter(x=>x.id!==h.id))} className="absolute top-4 right-4 text-slate-200 hover:text-red-500 transition-all font-bold">✕</button>
                                             <div className="space-y-3">
                                                 <div>
-                                                    <label className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Helper Name</label>
-                                                    <input className="font-bold border-b-2 w-full text-xl outline-none focus:border-blue-400 py-1" value={h.name} placeholder="名前を入力" onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).name=e.target.value; setHelpers(n)}} />
+                                                    <label className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">Helper Name</label>
+                                                    <input className="font-bold border-b-2 w-full text-lg outline-none focus:border-blue-400 py-1" value={h.name} placeholder="名前を入力" onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).name=e.target.value; setHelpers(n)}} />
                                                 </div>
                                                 <div>
-                                                    <label className="text-[10px] text-red-400 font-bold uppercase tracking-widest">NG Clients</label>
+                                                    <label className="text-[9px] text-red-400 font-bold uppercase tracking-widest">NG利用者 (カンマ区切り)</label>
                                                     <input className="w-full text-xs border-2 border-slate-50 p-2 rounded-xl bg-slate-50 focus:bg-white focus:border-red-100 outline-none" value={h.ngClients} placeholder="例: 田中, 佐藤" onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).ngClients=e.target.value; setHelpers(n)}} />
                                                 </div>
                                             </div>
                                         </div>
                                     ))}
                                 </div>
+                                {helpers.length > 0 && <button onClick={()=>{if(confirm('全台帳を削除しますか？'))setHelpers([])}} className="text-xs text-red-500 underline">台帳を一括削除</button>}
                             </div>
                         )}
                     </main>
 
                     {isAnalyzing && (
                         <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md flex flex-col items-center justify-center z-50">
-                            <div className="w-20 h-20 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-6"></div>
-                            <p className="text-white font-bold text-2xl animate-pulse">AI Studio のパワーを呼び出し中...</p>
-                            <p className="text-slate-400 mt-2">※300名分のデータも、解析できれば一瞬です</p>
+                            <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                            <p className="text-white font-bold text-xl animate-pulse tracking-widest">AI STUDIO ENGINE ANALYZING...</p>
                         </div>
                     )}
                 </div>
