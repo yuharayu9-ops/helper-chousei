@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>CARE MATCH v7.7 (Eco-Free)</title>
+    <title>CARE MATCH v7.8 (Auto-Connect)</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -14,115 +14,123 @@
         const { useState, useEffect } = React;
 
         function App() {
-            const [helpers, setHelpers] = useState(() => JSON.parse(localStorage.getItem('cm_eco_h') || '[]'));
-            const [schedules, setSchedules] = useState(() => JSON.parse(localStorage.getItem('cm_eco_s') || '[]'));
-            const [apiKey, setApiKey] = useState(() => localStorage.getItem('cm_eco_k') || '');
-            const [status, setStatus] = useState('準備完了（完全無料枠で動作中）');
+            const [helpers, setHelpers] = useState(() => JSON.parse(localStorage.getItem('cm_final_h') || '[]'));
+            const [schedules, setSchedules] = useState(() => JSON.parse(localStorage.getItem('cm_final_s') || '[]'));
+            const [apiKey, setApiKey] = useState(() => localStorage.getItem('cm_final_k') || '');
+            const [status, setStatus] = useState('準備完了');
 
-            useEffect(() => { localStorage.setItem('cm_eco_h', JSON.stringify(helpers)); }, [helpers]);
-            useEffect(() => { localStorage.setItem('cm_eco_s', JSON.stringify(schedules)); }, [schedules]);
-            useEffect(() => { localStorage.setItem('cm_eco_k', apiKey); }, [apiKey]);
+            useEffect(() => { localStorage.setItem('cm_final_h', JSON.stringify(helpers)); }, [helpers]);
+            useEffect(() => { localStorage.setItem('cm_final_s', JSON.stringify(schedules)); }, [schedules]);
+            useEffect(() => { localStorage.setItem('cm_final_k', apiKey); }, [apiKey]);
 
             const runAI = async (e) => {
                 const file = e.target.files[0];
-                if (!apiKey) { alert("APIキーが設定されていません"); return; }
-                setStatus('⏳ 解析中...');
+                if (!apiKey) { alert("APIキーを入力してください"); return; }
+                setStatus('🔍 利用可能なモデルを探索中...');
 
                 const reader = new FileReader();
                 reader.readAsDataURL(file);
                 reader.onload = async () => {
                     const base64 = reader.result.split(',')[1];
-                    try {
-                        const response = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                contents: [{ parts: [
-                                    { text: "介護依頼を抽出し[{\"date\":\"YYYY-MM-DD\",\"time\":\"HH:MM\",\"client\":\"...\",\"service\":\"...\"}]形式で出力してください。説明不要。" },
-                                    { inline_data: { mime_type: file.type, data: base64 } }
-                                ] }]
-                            })
-                        });
+                    
+                    // 1.5-flashがダメな場合に備え、複数のエンドポイントとモデル名を順に試す
+                    const attempts = [
+                        { ver: 'v1beta', mod: 'gemini-1.5-flash' },
+                        { ver: 'v1', mod: 'gemini-pro-vision' }, // 旧モデル
+                        { ver: 'v1beta', mod: 'gemini-1.5-pro' }
+                    ];
 
-                        const data = await response.json();
-                        
-                        if (data.error) {
-                            if (data.error.code === 429) {
-                                setStatus("❌ 混み合っています。1分ほど待ってから再度お試しください。");
-                            } else {
-                                setStatus(`❌ エラー: ${data.error.message}`);
-                            }
-                            return;
+                    let success = false;
+                    for (const attempt of attempts) {
+                        try {
+                            setStatus(`${attempt.mod} (${attempt.ver}) で接続試行中...`);
+                            const response = await fetch(`https://generativelanguage.googleapis.com/${attempt.ver}/models/${attempt.mod}:generateContent?key=${apiKey}`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    contents: [{ parts: [
+                                        { text: "Extract list as JSON: [{\"date\":\"YYYY-MM-DD\",\"time\":\"HH:MM\",\"client\":\"...\",\"service\":\"...\"}]" },
+                                        { inline_data: { mime_type: file.type, data: base64 } }
+                                    ] }]
+                                })
+                            });
+
+                            const data = await response.json();
+                            if (data.error) continue; // エラーなら次のモデルへ
+
+                            const text = data.candidates[0].content.parts[0].text;
+                            const json = JSON.parse(text.match(/\[[\s\S]*\]/)[0]);
+                            setSchedules([...json, ...schedules]);
+                            setStatus(`✅ 成功！ (${attempt.mod} を使用)`);
+                            success = true;
+                            break;
+                        } catch (err) {
+                            continue;
                         }
+                    }
 
-                        const text = data.candidates[0].content.parts[0].text;
-                        const json = JSON.parse(text.match(/\[[\s\S]*\]/)[0]);
-                        setSchedules([...json, ...schedules]);
-                        setStatus(`✅ ${json.length}件の読み込みに成功！`);
-                    } catch (err) {
-                        setStatus("❌ 読み取りエラー。ファイルが対応していないか、APIキーが正しくありません。");
+                    if (!success) {
+                        setStatus("❌ 全ての接続ルートが拒否されました。APIキーがまだGoogle側で有効化されていない可能性があります。");
                     }
                 };
             };
 
             return (
-                <div className="max-w-4xl mx-auto my-8 bg-white shadow-xl rounded-3xl overflow-hidden border border-slate-200">
-                    <header className="bg-slate-900 p-6 text-white flex justify-between items-center border-b-4 border-green-500">
-                        <h1 className="text-xl font-bold">CARE MATCH v7.7</h1>
-                        <input type="password" placeholder="API Key" className="p-2 rounded bg-slate-800 text-xs w-48 border-none focus:ring-2 focus:ring-green-500" value={apiKey} onChange={(e)=>setApiKey(e.target.value)} />
+                <div className="max-w-4xl mx-auto my-8 p-6 bg-white rounded-3xl shadow-2xl border">
+                    <header className="flex justify-between items-center mb-6 bg-slate-900 p-4 rounded-2xl text-white font-bold">
+                        <span>CARE MATCH v7.8</span>
+                        <input type="password" placeholder="API Key" className="p-2 rounded bg-slate-800 text-xs w-48 border border-slate-700 shadow-inner" value={apiKey} onChange={(e)=>setApiKey(e.target.value)} />
                     </header>
 
-                    <div className="p-6">
-                        <div className={`mb-6 p-4 rounded-xl font-bold text-center border-2 ${status.includes('❌') ? 'bg-red-50 text-red-600 border-red-100' : 'bg-green-50 text-green-700 border-green-100'}`}>
-                            {status}
-                        </div>
+                    <div className={`mb-6 p-4 rounded-xl font-bold text-center border-2 ${status.includes('❌') ? 'bg-red-50 text-red-600 border-red-200' : 'bg-blue-50 text-blue-700 border-blue-200'}`}>
+                        {status}
+                    </div>
 
-                        <div className="grid grid-cols-2 gap-4 mb-8">
-                            <label className="flex flex-col items-center justify-center p-12 bg-green-600 text-white rounded-3xl cursor-pointer hover:bg-green-700 shadow-lg active:scale-95 transition-all">
-                                <span className="text-3xl mb-1">📄</span>
-                                <span className="font-bold">PDF/画像を解析</span>
-                                <input type="file" className="hidden" onChange={runAI} />
-                            </label>
-                            <button onClick={() => setSchedules([{date:'', time:'', client:'', service:'', helper:''}, ...schedules])} className="p-12 bg-slate-100 rounded-3xl font-bold hover:bg-slate-200 transition-all border-2 border-slate-200">
-                                ➕ 手動で1件追加
-                            </button>
-                        </div>
+                    <div className="grid grid-cols-2 gap-4 mb-8">
+                        <label className="flex flex-col items-center justify-center p-12 bg-blue-600 text-white rounded-3xl cursor-pointer hover:bg-blue-700 transition-all shadow-lg active:scale-95">
+                            <span className="text-3xl mb-1">📄</span>
+                            <span className="font-bold">PDF/画像を解析</span>
+                            <input type="file" className="hidden" onChange={runAI} />
+                        </label>
+                        <button onClick={() => setSchedules([{date:'', time:'', client:'', service:''}, ...schedules])} className="p-12 bg-slate-100 rounded-3xl font-bold hover:bg-slate-200 border-2 border-slate-200 shadow-sm">
+                            ➕ 手動で1件追加
+                        </button>
+                    </div>
 
-                        <div className="overflow-x-auto rounded-2xl border">
-                            <table className="w-full text-sm">
-                                <thead className="bg-slate-50 font-bold border-b">
-                                    <tr><th className="p-3 text-left">日時</th><th className="p-3 text-left">利用者</th><th className="p-3 text-left">内容</th><th className="p-3 text-left text-green-600">担当</th><th className="p-3"></th></tr>
-                                </thead>
-                                <tbody>
-                                    {schedules.map((s, i) => (
-                                        <tr key={i} className="border-b hover:bg-slate-50">
-                                            <td className="p-2"><input type="date" className="block text-xs mb-1" value={s.date} onChange={(e)=>{const n=[...schedules]; n[i].date=e.target.value; setSchedules(n)}}/><input type="time" className="block text-xs" value={s.time} onChange={(e)=>{const n=[...schedules]; n[i].time=e.target.value; setSchedules(n)}}/></td>
-                                            <td className="p-2"><input className="w-full font-bold bg-transparent border-b border-transparent focus:border-green-500 outline-none" value={s.client} onChange={(e)=>{const n=[...schedules]; n[i].client=e.target.value; setSchedules(n)}}/></td>
-                                            <td className="p-2"><input className="w-full bg-transparent border-b border-transparent focus:border-green-500 outline-none" value={s.service} onChange={(e)=>{const n=[...schedules]; n[i].service=e.target.value; setSchedules(n)}}/></td>
-                                            <td className="p-2">
-                                                <select className="w-full p-2 border rounded font-bold text-blue-600 bg-white" value={s.helper} onChange={(e)=>{const n=[...schedules]; n[i].helper=e.target.value; setSchedules(n)}}>
-                                                    <option value="">▼ 未選択</option>
-                                                    {helpers.map(h => <option key={h.id} value={h.name}>{h.name}</option>)}
-                                                </select>
-                                            </td>
-                                            <td className="p-2 text-center"><button onClick={() => setSchedules(schedules.filter((_, idx) => idx !== i))} className="text-slate-300 hover:text-red-500 font-bold">✕</button></td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-
-                        <div className="mt-10 p-6 bg-slate-50 rounded-3xl border">
-                            <h2 className="font-bold mb-4 text-slate-600">👥 ヘルパー台帳管理</h2>
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                                {helpers.map(h => (
-                                    <div key={h.id} className="p-3 bg-white border rounded-xl relative group shadow-sm">
-                                        <input className="font-bold w-full outline-none text-sm" value={h.name} placeholder="名前" onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).name=e.target.value; setHelpers(n)}} />
-                                        <button onClick={() => setHelpers(helpers.filter(x=>x.id!==h.id))} className="absolute top-1 right-1 text-slate-200 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity">✕</button>
-                                    </div>
+                    <div className="overflow-hidden rounded-2xl border shadow-sm">
+                        <table className="w-full text-sm">
+                            <thead className="bg-slate-50 font-bold border-b">
+                                <tr><th className="p-3 text-left">日時</th><th className="p-3 text-left">利用者</th><th className="p-3 text-left">内容</th><th className="p-3 text-left text-blue-600">担当</th><th className="p-3"></th></tr>
+                            </thead>
+                            <tbody>
+                                {schedules.map((s, i) => (
+                                    <tr key={i} className="border-b hover:bg-slate-50/50">
+                                        <td className="p-2"><input type="date" className="block text-xs mb-1" value={s.date} onChange={(e)=>{const n=[...schedules]; n[i].date=e.target.value; setSchedules(n)}}/><input type="time" className="block text-xs" value={s.time} onChange={(e)=>{const n=[...schedules]; n[i].time=e.target.value; setSchedules(n)}}/></td>
+                                        <td className="p-2 font-bold"><input className="w-full bg-transparent outline-none border-b focus:border-blue-400" value={s.client} onChange={(e)=>{const n=[...schedules]; n[i].client=e.target.value; setSchedules(n)}}/></td>
+                                        <td className="p-2"><input className="w-full bg-transparent outline-none border-b focus:border-blue-400" value={s.service} onChange={(e)=>{const n=[...schedules]; n[i].service=e.target.value; setSchedules(n)}}/></td>
+                                        <td className="p-2">
+                                            <select className="w-full p-2 border rounded font-bold text-blue-600 bg-white shadow-sm" value={s.helper} onChange={(e)=>{const n=[...schedules]; n[i].helper=e.target.value; setSchedules(n)}}>
+                                                <option value="">▼ 未選択</option>
+                                                {helpers.map(h => <option key={h.id} value={h.name}>{h.name}</option>)}
+                                            </select>
+                                        </td>
+                                        <td className="p-2 text-center"><button onClick={() => setSchedules(schedules.filter((_, idx) => idx !== i))} className="text-slate-300 hover:text-red-500 font-bold">✕</button></td>
+                                    </tr>
                                 ))}
-                                <button onClick={()=>setHelpers([{id:Date.now(), name:''}, ...helpers])} className="border-2 border-dashed border-slate-300 text-slate-400 rounded-xl font-bold hover:bg-white hover:border-green-500 hover:text-green-500 transition-all">+ 追加</button>
-                            </div>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div className="mt-10 p-6 bg-slate-50 rounded-3xl border">
+                        <h2 className="font-bold mb-4 text-slate-500 flex items-center">👥 ヘルパー台帳 <span className="text-[10px] ml-2 px-2 bg-slate-200 rounded-full italic">TEAM SHARED</span></h2>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            {helpers.map(h => (
+                                <div key={h.id} className="p-3 bg-white border rounded-xl relative group shadow-sm">
+                                    <input className="font-bold w-full outline-none text-sm" value={h.name} placeholder="名前" onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).name=e.target.value; setHelpers(n)}} />
+                                    <button onClick={() => setHelpers(helpers.filter(x=>x.id!==h.id))} className="absolute top-1 right-1 text-slate-200 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity font-bold">✕</button>
+                                </div>
+                            ))}
+                            <button onClick={()=>setHelpers([{id:Date.now(), name:''}, ...helpers])} className="border-2 border-dashed border-slate-300 text-slate-400 rounded-xl font-bold hover:bg-white hover:border-blue-500 hover:text-blue-500 transition-all">+ 追加</button>
                         </div>
                     </div>
                 </div>
