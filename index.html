@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>介護マッチング・スマート台帳</title>
+    <title>介護マッチング・スマートシフト管理</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -13,7 +13,7 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect } = React;
+        const { useState } = React;
 
         function App() {
             const [viewDate, setViewDate] = useState(new Date());
@@ -24,7 +24,7 @@
             const [apiKey, setApiKey] = useState('');
             const [isAnalyzing, setIsAnalyzing] = useState(false);
 
-            // --- CSV読み込み (テラシステム形式対応) ---
+            // --- CSV読み込み (利用者名簿) ---
             const handleCSVUpload = (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
@@ -32,23 +32,20 @@
                 reader.onload = (event) => {
                     const text = event.target.result;
                     const lines = text.split('\n');
-                    const newClients = lines.slice(1) // ヘッダーを飛ばす
-                        .map(line => {
-                            const cols = line.split(',');
-                            const name = cols[0]?.replace(/"/g, '').trim(); // 1列目の利用者名
-                            return name ? { id: Math.random(), name } : null;
-                        })
-                        .filter(c => c !== null);
+                    const newClients = lines.slice(1).map(line => {
+                        const cols = line.split(',');
+                        const name = cols[0]?.replace(/"/g, '').trim();
+                        return name ? { id: Math.random(), name } : null;
+                    }).filter(c => c !== null);
                     setClients([...clients, ...newClients]);
-                    alert(`${newClients.length}名の利用者を登録しました。`);
                 };
-                reader.readAsText(file, "Shift-JIS"); // 日本語文字化け対策
+                reader.readAsText(file, "Shift-JIS");
             };
 
-            // --- AI解析 (FAX/メール) ---
-            const handleAIUpload = async (e) => {
+            // --- AI解析 (予定 または ヘルパーシフト) ---
+            const handleAIUpload = async (e, type) => {
                 const file = e.target.files[0];
-                const key = apiKey || "NEXT_PUBLIC_GEMINI_API_KEY"; // Vercel環境変数を優先
+                const key = apiKey || "NEXT_PUBLIC_GEMINI_API_KEY";
                 if (!file) return;
                 
                 setIsAnalyzing(true);
@@ -56,21 +53,33 @@
                 reader.readAsDataURL(file);
                 reader.onload = async () => {
                     const base64Data = reader.result.split(',')[1];
+                    const prompt = type === 'schedule' 
+                        ? "介護予定表から date(YYYY-MM-DD), time(HH:MM), client, helper, service を抽出しJSON配列で返して。"
+                        : "ヘルパーの勤務可能連絡から helper_name, available_dates(YYYY-MM-DDの配列), notes(時間変更など)を抽出しJSONで返して。";
+                    
                     try {
                         const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                contents: [{ parts: [
-                                    { text: "介護の予定表画像から「date(YYYY-MM-DD), time(HH:MM), client(利用者名), helper(ヘルパー名), service(移動支援/行動援護/重度訪問/居宅介護)」を抽出し、JSON配列のみ返して。" },
-                                    { inline_data: { mime_type: file.type, data: base64Data } }
-                                ]}]
-                            })
+                            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: file.type, data: base64Data } }] }] })
                         });
                         const data = await res.json();
-                        const jsonStr = data.candidates[0].content.parts[0].text.match(/\[.*\]/s)[0];
-                        setSchedules([...schedules, ...JSON.parse(jsonStr)]);
-                    } catch (err) { alert("解析失敗。APIキーの設定を確認してください。"); }
+                        const jsonStr = data.candidates[0].content.parts[0].text.match(/\[.*\]|\{.*\}/s)[0];
+                        const result = JSON.parse(jsonStr);
+
+                        if (type === 'schedule') {
+                            setSchedules([...schedules, ...result]);
+                        } else {
+                            // ヘルパーのメモ欄に稼働可能日を自動追記
+                            const newHelpers = [...helpers];
+                            const target = newHelpers.find(h => h.name === result.helper_name);
+                            if (target) {
+                                target.shiftMemo = `【AI読込】可:${result.available_dates.join(', ')} / ${result.notes || ''}`;
+                                setHelpers(newHelpers);
+                                alert(`${result.helper_name}さんのシフト情報を更新しました。`);
+                            }
+                        }
+                    } catch (err) { alert("解析失敗。APIキーまたは画像を確認してください。"); }
                     setIsAnalyzing(false);
                 };
             };
@@ -78,93 +87,126 @@
             // 警告判定
             const checkAlert = (s, i) => {
                 const alerts = [];
+                // 重複
                 if (schedules.some((other, idx) => i !== idx && other.helper === s.helper && other.date === s.date && other.time === s.time && s.helper)) alerts.push("重");
+                
                 const h = helpers.find(x => x.name === s.helper);
-                if (h && s.service && !h.services.includes(s.service)) alerts.push("資");
+                if (h) {
+                    // 資格
+                    if (s.service && !h.services.includes(s.service)) alerts.push("資");
+                    // シフト外チェック（簡易）
+                    if (h.shiftMemo && !h.shiftMemo.includes(s.date)) alerts.push("？稼働日外");
+                }
                 return alerts;
             };
 
             return (
-                <div className="max-w-5xl mx-auto my-8 shadow-2xl rounded-xl overflow-hidden bg-white">
+                <div className="max-w-6xl mx-auto my-8 shadow-2xl rounded-xl bg-white min-h-[800px]">
                     <header className="bg-slate-800 text-white p-6 flex justify-between items-center">
                         <div>
-                            <h1 className="text-2xl font-bold italic">CareMatch AI</h1>
-                            <p className="text-xs text-slate-400">移動支援・行動援護・重度訪問・居宅介護 対応</p>
+                            <h1 className="text-2xl font-bold italic">CareMatch AI Pro</h1>
+                            <p className="text-xs text-slate-400">常勤・非常勤・変動シフト対応版</p>
                         </div>
-                        <input type="password" placeholder="API Key (未設定時のみ)" className="text-black text-xs p-2 rounded w-40" onChange={(e)=>setApiKey(e.target.value)} />
+                        <input type="password" placeholder="API Key" className="text-black text-xs p-2 rounded w-40" value={apiKey} onChange={(e)=>setApiKey(e.target.value)} />
                     </header>
 
                     <div className="flex bg-slate-100 border-b">
-                        {['matching', 'ledger'].map(t => (
-                            <button key={t} onClick={()=>setActiveTab(t)} className={`px-8 py-4 font-bold ${activeTab===t ? 'bg-white text-blue-600 border-t-4 border-blue-600' : 'text-slate-500'}`}>
-                                {t === 'matching' ? '🏠 マッチング画面' : '👥 台帳・CSV読込'}
-                            </button>
-                        ))}
+                        <button onClick={()=>setActiveTab('matching')} className={`px-8 py-4 font-bold ${activeTab==='matching' ? 'bg-white text-blue-600 border-t-4 border-blue-600' : 'text-slate-500'}`}>📅 マッチング</button>
+                        <button onClick={()=>setActiveTab('ledger')} className={`px-8 py-4 font-bold ${activeTab==='ledger' ? 'bg-white text-blue-600 border-t-4 border-blue-600' : 'text-slate-500'}`}>👥 ヘルパー・利用者管理</button>
                     </div>
 
                     <div className="p-8">
                         {activeTab === 'matching' ? (
                             <div>
-                                <div className="flex justify-between items-center mb-6">
+                                <div className="flex justify-between items-center mb-6 bg-blue-50 p-4 rounded-lg border border-blue-100">
                                     <div className="flex items-center gap-4">
-                                        <button onClick={()=>setViewDate(new Date())} className="text-sm bg-slate-200 px-3 py-1 rounded">当月</button>
-                                        <input type="month" className="border p-1" value={`${viewDate.getFullYear()}-${String(viewDate.getMonth()+1).padStart(2,'0')}`} onChange={(e)=>setViewDate(new Date(e.target.value))} />
+                                        <h2 className="text-xl font-bold">{viewDate.getFullYear()}年{viewDate.getMonth()+1}月</h2>
+                                        <input type="month" className="border p-1" onChange={(e)=>setViewDate(new Date(e.target.value))} />
                                     </div>
                                     <div className="flex gap-2">
-                                        <label className="bg-orange-500 text-white px-4 py-2 rounded-lg cursor-pointer hover:bg-orange-600 shadow">
-                                            {isAnalyzing ? "AI解析中..." : "📸 FAX/メール読込"}
-                                            <input type="file" className="hidden" onChange={handleAIUpload} />
+                                        <label className="bg-orange-500 text-white px-4 py-2 rounded-lg cursor-pointer hover:bg-orange-600">
+                                            {isAnalyzing ? "解析中..." : "📸 予定表を読込"}
+                                            <input type="file" className="hidden" onChange={(e)=>handleAIUpload(e, 'schedule')} />
                                         </label>
-                                        <button onClick={()=>setSchedules([{date:'',time:'',helper:'',client:'',service:'移動支援'}, ...schedules])} className="bg-blue-600 text-white px-4 py-2 rounded-lg shadow">+ 手動追加</button>
+                                        <button onClick={()=>setSchedules([{date:'',time:'',helper:'',client:'',service:'移動支援'}, ...schedules])} className="bg-blue-600 text-white px-4 py-2 rounded-lg">+ 手入力</button>
                                     </div>
                                 </div>
-                                <table className="w-full border">
-                                    <thead className="bg-slate-50">
+                                <table className="w-full border shadow-sm">
+                                    <thead className="bg-slate-100">
                                         <tr><th className="p-2 border">日付</th><th className="p-2 border">時間</th><th className="p-2 border">ヘルパー</th><th className="p-2 border">利用者</th><th className="p-2 border">サービス</th><th className="p-2 border">警告</th></tr>
                                     </thead>
                                     <tbody>
                                         {schedules.map((s, i) => (
                                             <tr key={i} className="hover:bg-blue-50">
-                                                <td className="border p-1"><input type="date" value={s.date} className="w-full" onChange={(e)=>{const n=[...schedules];n[i].date=e.target.value;setSchedules(n)}}/></td>
-                                                <td className="border p-1"><input type="time" value={s.time} className="w-full" onChange={(e)=>{const n=[...schedules];n[i].time=e.target.value;setSchedules(n)}}/></td>
-                                                <td className="border p-1"><select className="w-full" value={s.helper} onChange={(e)=>{const n=[...schedules];n[i].helper=e.target.value;setSchedules(n)}}><option value="">選択</option>{helpers.map(h=><option key={h.id} value={h.name}>{h.name}</option>)}</select></td>
-                                                <td className="border p-1"><select className="w-full" value={s.client} onChange={(e)=>{const n=[...schedules];n[i].client=e.target.value;setSchedules(n)}}><option value="">選択</option>{clients.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}</select></td>
-                                                <td className="border p-1"><select className="w-full" value={s.service} onChange={(e)=>{const n=[...schedules];n[i].service=e.target.value;setSchedules(n)}}><option value="移動支援">移動支援</option><option value="行動援護">行動援護</option><option value="重度訪問">重度訪問</option><option value="居宅介護">居宅介護</option></select></td>
-                                                <td className="border p-1 text-center font-bold text-red-600">{checkAlert(s,i).join(' ')}</td>
+                                                <td className="border p-1"><input type="date" value={s.date} className="w-full text-sm" onChange={(e)=>{const n=[...schedules];n[i].date=e.target.value;setSchedules(n)}}/></td>
+                                                <td className="border p-1"><input type="time" value={s.time} className="w-full text-sm" onChange={(e)=>{const n=[...schedules];n[i].time=e.target.value;setSchedules(n)}}/></td>
+                                                <td className="border p-1">
+                                                    <select className="w-full text-sm" value={s.helper} onChange={(e)=>{const n=[...schedules];n[i].helper=e.target.value;setSchedules(n)}}>
+                                                        <option value="">選択</option>
+                                                        {helpers.map(h=><option key={h.id} value={h.name}>{h.name} ({h.type})</option>)}
+                                                    </select>
+                                                </td>
+                                                <td className="border p-1">
+                                                    <select className="w-full text-sm" value={s.client} onChange={(e)=>{const n=[...schedules];n[i].client=e.target.value;setSchedules(n)}}>
+                                                        <option value="">選択</option>
+                                                        {clients.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}
+                                                    </select>
+                                                </td>
+                                                <td className="border p-1">
+                                                    <select className="w-full text-sm" value={s.service} onChange={(e)=>{const n=[...schedules];n[i].service=e.target.value;setSchedules(n)}}>
+                                                        <option value="移動支援">移動支援</option><option value="行動援護">行動援護</option><option value="重度訪問">重度訪問</option><option value="居宅介護">居宅介護</option>
+                                                    </select>
+                                                </td>
+                                                <td className="border p-1 text-center font-bold text-red-600 text-[10px]">{checkAlert(s,i).join(' ')}</td>
                                             </tr>
                                         ))}
                                     </tbody>
                                 </table>
                             </div>
                         ) : (
-                            <div className="grid grid-cols-2 gap-10">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
                                 <div>
-                                    <h3 className="font-bold mb-4 text-slate-700">🏠 利用者台帳（CSV対応）</h3>
-                                    <div className="mb-4 p-4 border-2 border-dashed border-slate-300 rounded-lg text-center">
-                                        <p className="text-xs text-slate-500 mb-2">テラシステムの名簿CSVを選択</p>
-                                        <input type="file" accept=".csv" onChange={handleCSVUpload} className="text-xs" />
+                                    <h3 className="font-bold mb-4 flex justify-between items-center">
+                                        <span>🏠 利用者台帳 (CSV読込)</span>
+                                        <input type="file" accept=".csv" onChange={handleCSVUpload} className="text-[10px] w-32" />
+                                    </h3>
+                                    <div className="h-96 overflow-y-auto border p-2 rounded bg-slate-50 space-y-1">
+                                        {clients.map(c => <div key={c.id} className="bg-white border p-1 text-sm rounded shadow-sm">{c.name}</div>)}
                                     </div>
-                                    <div className="h-64 overflow-y-auto border p-2 rounded bg-slate-50">
-                                        {clients.map(c => <div key={c.id} className="border-b py-1 text-sm">{c.name}</div>)}
-                                    </div>
-                                    <button onClick={()=>setClients([])} className="text-xs text-red-500 mt-2">利用者リストを一括削除</button>
                                 </div>
                                 <div>
-                                    <h3 className="font-bold mb-4 text-slate-700">👤 ヘルパー台帳</h3>
-                                    <button onClick={()=>setHelpers([...helpers, {id:Date.now(), name:'新規ヘルパー', services:[]}])} className="bg-slate-800 text-white px-3 py-1 rounded text-xs mb-4">+ ヘルパー追加</button>
-                                    <div className="h-64 overflow-y-auto border p-2 rounded bg-slate-50">
+                                    <h3 className="font-bold mb-4 flex justify-between items-center">
+                                        <span>👤 ヘルパー管理・シフト更新</span>
+                                        <button onClick={()=>setHelpers([{id:Date.now(), name:'新規', type:'非常勤', services:[], shiftMemo:''}, ...helpers])} className="bg-slate-800 text-white px-3 py-1 rounded text-xs">+ 追加</button>
+                                    </h3>
+                                    <div className="mb-4 bg-orange-50 p-3 rounded border border-orange-200">
+                                        <p className="text-[10px] font-bold text-orange-700 mb-1">📸 ヘルパーのシフト変更連絡を読込</p>
+                                        <input type="file" onChange={(e)=>handleAIUpload(e, 'shift')} className="text-xs" />
+                                    </div>
+                                    <div className="h-80 overflow-y-auto space-y-3">
                                         {helpers.map(h => (
-                                            <div key={h.id} className="mb-4 p-2 bg-white rounded shadow-sm">
-                                                <input className="font-bold border-b w-full mb-2" value={h.name} onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).name=e.target.value; setHelpers(n)}} />
-                                                <div className="flex flex-wrap gap-2 text-[10px]">
-                                                    {["移動支援","行動援護","重度訪問","居宅介護"].map(svc => (
-                                                        <label key={svc}><input type="checkbox" checked={h.services.includes(svc)} onChange={(e)=>{
+                                            <div key={h.id} className="p-3 bg-white border rounded shadow-sm">
+                                                <div className="flex justify-between mb-2">
+                                                    <input className="font-bold border-b w-2/3" value={h.name} onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).name=e.target.value; setHelpers(n)}} />
+                                                    <select className="text-xs border rounded" value={h.type} onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).type=e.target.value; setHelpers(n)}}>
+                                                        <option value="常勤">常勤</option><option value="非常勤">非常勤</option>
+                                                    </select>
+                                                </div>
+                                                <div className="text-[10px] text-gray-500 mb-2">
+                                                    資格: {["移動支援","行動援護","重度訪問","居宅介護"].map(svc => (
+                                                        <label className="mr-2"><input type="checkbox" checked={h.services.includes(svc)} onChange={(e)=>{
                                                             const n=[...helpers]; const t=n.find(x=>x.id===h.id);
                                                             t.services = e.target.checked ? [...t.services, svc] : t.services.filter(s=>s!==svc);
                                                             setHelpers(n);
                                                         }} /> {svc}</label>
                                                     ))}
                                                 </div>
+                                                <textarea 
+                                                    className="w-full text-[10px] p-1 border bg-slate-50" 
+                                                    placeholder="AI読込結果や基本曜日をここにメモ..." 
+                                                    value={h.shiftMemo}
+                                                    onChange={(e)=>{const n=[...helpers]; n.find(x=>x.id===h.id).shiftMemo=e.target.value; setHelpers(n)}}
+                                                />
                                             </div>
                                         ))}
                                     </div>
