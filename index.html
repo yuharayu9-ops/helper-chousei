@@ -2,26 +2,33 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>CARE MATCH - FULL AUTOMATED</title>
+    <title>CARE MATCH - THE FINAL INTEGRATION</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
-<body class="bg-slate-100 p-4">
+<body class="bg-slate-50">
     <div id="root"></div>
     <script type="text/babel">
-        const { useState } = React;
+        const { useState, useEffect } = React;
 
         function App() {
-            const [helpers, setHelpers] = useState([]);
-            const [users, setUsers] = useState([]);
-            const [apiKey, setApiKey] = useState(localStorage.getItem('cm_final_key') || '');
+            const [helpers, setHelpers] = useState(() => JSON.parse(localStorage.getItem('cm_h') || '[]'));
+            const [users, setUsers] = useState(() => JSON.parse(localStorage.getItem('cm_u') || '[]'));
+            const [apiKey, setApiKey] = useState(localStorage.getItem('cm_key') || '');
             const [status, setStatus] = useState('待機中');
 
+            useEffect(() => {
+                localStorage.setItem('cm_h', JSON.stringify(helpers));
+                localStorage.setItem('cm_u', JSON.stringify(users));
+                localStorage.setItem('cm_key', apiKey);
+            }, [helpers, users, apiKey]);
+
             const callGemini = async (base64) => {
-                // 【404対策】URLの最後にモデル名を結合するのではなく、パスとして指定
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+                // 【404根絶の最終指定】
+                // gemini-1.5-flash ではなく、リリース番号付きの ID を直接叩きます
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`;
                 
                 const response = await fetch(url, {
                     method: 'POST',
@@ -29,7 +36,7 @@
                     body: JSON.stringify({
                         contents: [{
                             parts: [
-                                { text: "画像から氏名(name)と稼働スケジュール(schedule:[{date,startTime,endTime}])をJSON形式で抽出してください。余計な解説は不要です。" },
+                                { text: "画像から氏名(name)と稼働スケジュール(schedule:[{date,startTime,endTime}])をJSONで抽出。日付はYYYY-MM-DD形式、時間はHH:MM形式で。" },
                                 { inline_data: { mime_type: "image/jpeg", data: base64 } }
                             ]
                         }]
@@ -37,91 +44,84 @@
                 });
                 
                 const data = await response.json();
-                if (data.error) throw new Error(data.error.message);
+                if (data.error) throw new Error(`${data.error.message} (${data.error.code})`);
                 
-                const text = data.candidates[0].content.parts[0].text;
-                return JSON.parse(text.match(/\{[\s\S]*\}|\[[\s\S]*\]/)[0]);
+                const jsonText = data.candidates[0].content.parts[0].text;
+                const match = jsonText.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+                return JSON.parse(match[0]);
             };
 
-            const handleUpload = async (e, type) => {
+            const handleFile = async (e, type) => {
                 const file = e.target.files[0];
-                if (!file || !apiKey) return alert("APIキーを確認してください");
+                if (!file || !apiKey) return alert("APIキーを入力してください");
+                setStatus('AI解析中...');
                 
                 const reader = new FileReader();
                 reader.readAsDataURL(file);
                 reader.onload = async () => {
-                    setStatus(`${type === 'H' ? 'ヘルパー' : '利用者'}のデータを解析中...`);
                     try {
-                        const base64 = reader.result.split(',')[1];
-                        const result = await callGemini(base64);
-                        if (type === 'H') setHelpers(prev => [...prev, result]);
-                        else setUsers(prev => [...prev, result]);
-                        setStatus('読み込み完了');
-                        localStorage.setItem('cm_final_key', apiKey);
+                        const res = await callGemini(reader.result.split(',')[1]);
+                        if (type === 'H') setHelpers([...helpers, res]);
+                        else setUsers([...users, res]);
+                        setStatus('読み込み成功');
                     } catch (err) {
                         setStatus(`エラー: ${err.message}`);
                     }
                 };
             };
 
-            // 自動マッチングロジック
             const getMatches = () => {
-                const matches = [];
+                const results = [];
                 users.forEach(u => {
-                    u.schedule.forEach(uSched => {
-                        const availableHelpers = helpers.filter(h => 
-                            h.schedule.some(hSched => 
-                                hSched.date === uSched.date &&
-                                hSched.startTime <= uSched.startTime &&
-                                hSched.endTime >= uSched.endTime
+                    u.schedule?.forEach(uS => {
+                        const hit = helpers.filter(h => 
+                            h.schedule?.some(hS => 
+                                hS.date === uS.date && hS.startTime <= uS.startTime && hS.endTime >= uS.endTime
                             )
                         );
-                        matches.push({ user: u.name, date: uSched.date, time: `${uSched.startTime}-${uSched.endTime}`, helpers: availableHelpers });
+                        results.push({ user: u.name, date: uS.date, time: `${uS.startTime}-${uS.endTime}`, helpers: hit });
                     });
                 });
-                return matches;
+                return results;
             };
 
             return (
-                <div className="max-w-2xl mx-auto bg-white p-8 rounded-3xl shadow-xl border border-slate-200">
-                    <div className="flex justify-between items-center mb-8 border-b pb-4">
-                        <h1 className="text-2xl font-black italic tracking-tighter">CARE MATCH</h1>
-                        <input type="password" placeholder="API Key" className="bg-slate-50 p-2 rounded text-xs border" value={apiKey} onChange={(e)=>setApiKey(e.target.value)} />
-                    </div>
+                <div className="max-w-xl mx-auto my-10 bg-white p-8 rounded-[3rem] shadow-2xl border border-slate-100">
+                    <header className="mb-8 flex justify-between items-center">
+                        <h1 className="font-black italic text-2xl text-slate-800 tracking-tighter">CARE MATCH</h1>
+                        <input type="password" placeholder="Key" className="bg-slate-50 p-2 rounded-xl text-[10px] w-32 border" value={apiKey} onChange={(e)=>setApiKey(e.target.value)} />
+                    </header>
 
                     <div className="grid grid-cols-2 gap-4 mb-8">
-                        <label className="p-6 bg-blue-600 text-white rounded-2xl text-center cursor-pointer font-bold active:scale-95 transition-all">
-                            ヘルパー画像 読込
-                            <input type="file" className="hidden" onChange={(e)=>handleUpload(e, 'H')} />
+                        <label className="p-8 bg-blue-600 text-white rounded-[2rem] text-center cursor-pointer shadow-lg active:scale-95 transition-all">
+                            <span className="text-2xl block mb-2">👤</span>
+                            <span className="font-bold text-[10px] uppercase">Helper Scan</span>
+                            <input type="file" className="hidden" onChange={(e)=>handleFile(e, 'H')} />
                         </label>
-                        <label className="p-6 bg-emerald-600 text-white rounded-2xl text-center cursor-pointer font-bold active:scale-95 transition-all">
-                            利用者画像 読込
-                            <input type="file" className="hidden" onChange={(e)=>handleUpload(e, 'U')} />
+                        <label className="p-8 bg-emerald-600 text-white rounded-[2rem] text-center cursor-pointer shadow-lg active:scale-95 transition-all">
+                            <span className="text-2xl block mb-2">🏠</span>
+                            <span className="font-bold text-[10px] uppercase">User Scan</span>
+                            <input type="file" className="hidden" onChange={(e)=>handleFile(e, 'U')} />
                         </label>
                     </div>
 
-                    <div className="mb-8 p-4 bg-slate-50 rounded-xl text-center font-bold text-blue-600">
-                        ステータス: {status}
-                    </div>
+                    <div className="bg-slate-50 p-4 rounded-2xl text-center text-xs font-bold text-blue-500 mb-8 italic">Status: {status}</div>
 
-                    <div className="space-y-6">
-                        <h2 className="font-black text-slate-800 border-l-4 border-slate-800 pl-2 uppercase tracking-widest">Matching Results</h2>
+                    <div className="space-y-4">
+                        <h2 className="text-[10px] font-black text-slate-300 uppercase tracking-widest px-2">Matches Found</h2>
                         {getMatches().map((m, i) => (
-                            <div key={i} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                                <div className="flex justify-between font-bold mb-3">
+                            <div key={i} className="p-5 bg-white border border-slate-100 rounded-[2rem] shadow-sm">
+                                <div className="flex justify-between font-black text-slate-800 mb-2">
                                     <span>🏠 {m.user}</span>
-                                    <span className="text-sm text-slate-500">{m.date} {m.time}</span>
+                                    <span className="text-[10px] text-slate-400">{m.date} {m.time}</span>
                                 </div>
-                                <div className="space-y-2">
-                                    {m.helpers.length > 0 ? m.helpers.map((h, j) => (
-                                        <div key={j} className="bg-white p-3 rounded-xl shadow-sm text-sm font-bold text-blue-600 border border-blue-100">
-                                            👤 {h.name} さんが対応可能です
-                                        </div>
-                                    )) : <p className="text-xs text-slate-400">マッチするヘルパーはいません</p>}
-                                </div>
+                                {m.helpers.map((h, j) => (
+                                    <div key={j} className="text-sm font-bold text-blue-600 mt-2">✓ {h.name} さんが対応可能</div>
+                                ))}
                             </div>
                         ))}
                     </div>
+                    <button onClick={()=>{setHelpers([]);setUsers([]);}} className="w-full mt-10 text-[10px] text-slate-300 font-bold uppercase tracking-widest">Clear All Data</button>
                 </div>
             );
         }
