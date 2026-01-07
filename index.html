@@ -2,181 +2,140 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>CARE MATCH - PRO HYBRID</title>
+    <title>CARE MATCH - AI VISION EDITION</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src='https://unpkg.com/tesseract.js@v4.0.1/dist/tesseract.min.js'></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
 </head>
-<body class="bg-slate-100 p-4 font-sans min-h-screen">
-    <div class="max-w-4xl mx-auto">
-        <header class="flex justify-between items-center mb-8 bg-white p-6 rounded-3xl shadow-sm">
-            <h1 class="text-3xl font-black italic tracking-tighter text-slate-800">CARE MATCH</h1>
-            <div class="text-right">
-                <p class="text-[10px] font-bold text-blue-600 uppercase tracking-widest">Local Processing Mode</p>
-                <p class="text-[10px] text-slate-400">API非使用 / PDF・画像対応</p>
-            </div>
-        </header>
-
-        <div class="grid md:grid-cols-2 gap-6 mb-8">
-            <div class="space-y-6">
-                <div class="bg-white p-6 rounded-[2.5rem] shadow-md">
-                    <h2 class="font-black text-slate-700 mb-4 flex items-center">🚫 相性NGリスト</h2>
-                    <div class="flex gap-2 mb-4">
-                        <input id="ngU" placeholder="利用者" class="flex-1 p-2 bg-slate-50 rounded-lg text-sm border-none ring-1 ring-slate-200">
-                        <input id="ngH" placeholder="ヘルパー" class="flex-1 p-2 bg-slate-50 rounded-lg text-sm border-none ring-1 ring-slate-200">
-                        <button onclick="addNG()" class="bg-red-500 text-white px-4 rounded-lg font-bold text-sm">登録</button>
-                    </div>
-                    <div id="ngDisplay" class="flex flex-wrap gap-2"></div>
-                </div>
-
-                <div class="grid grid-cols-2 gap-4">
-                    <label class="bg-blue-600 text-white p-6 rounded-[2rem] text-center font-bold cursor-pointer shadow-lg hover:bg-blue-700 transition-all">
-                        <span class="block text-2xl">👤</span> ヘルパー読込
-                        <input type="file" class="hidden" accept="image/*,.pdf" onchange="processFile(this, 'H')">
-                    </label>
-                    <label class="bg-emerald-600 text-white p-6 rounded-[2rem] text-center font-bold cursor-pointer shadow-lg hover:bg-emerald-700 transition-all">
-                        <span class="block text-2xl">🏠</span> 利用者読込
-                        <input type="file" class="hidden" accept="image/*,.pdf" onchange="processFile(this, 'U')">
-                    </label>
-                </div>
-
-                <div id="status" class="text-center p-4 text-xs font-bold text-slate-400 animate-pulse"></div>
-            </div>
-
-            <div class="bg-white p-6 rounded-[2.5rem] shadow-md border-2 border-blue-100 overflow-hidden">
-                <h2 class="font-black text-slate-700 mb-4 tracking-widest uppercase text-xs">Data Registry (修正・確認)</h2>
-                <div id="registryList" class="space-y-3 max-h-[500px] overflow-y-auto pr-2">
-                    <p class="text-center text-slate-300 py-10 italic text-sm">データが読み込まれるとここに表示されます</p>
-                </div>
-            </div>
-        </div>
-
-        <div id="matchArea" class="space-y-4">
-            <h2 class="font-black text-slate-400 tracking-[0.3em] uppercase text-[10px] px-4">Matching Result</h2>
-            <div id="matchList" class="grid md:grid-cols-2 gap-4"></div>
-        </div>
-    </div>
-
-    <script>
+<body class="bg-slate-50">
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect } = React;
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
-        let registry = [];
-        let ngList = JSON.parse(localStorage.getItem('cm_ng_list') || '[]');
 
-        async function processFile(input, type) {
-            const file = input.files[0];
-            if (!file) return;
-            const status = document.getElementById('status');
-            status.innerText = "書類をスキャン中... しばらくお待ちください";
+        function App() {
+            const [helpers, setHelpers] = useState([]);
+            const [users, setUsers] = useState([]);
+            const [apiKey, setApiKey] = useState(localStorage.getItem('cm_key_vision') || '');
+            const [status, setStatus] = useState('待機中');
+            const [ngList, setNgList] = useState(() => JSON.parse(localStorage.getItem('cm_ng') || '[]'));
 
-            try {
-                let source;
-                if (file.type === "application/pdf") {
-                    const arrayBuffer = await file.arrayBuffer();
-                    const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
-                    const page = await pdf.getPage(1);
-                    const viewport = page.getViewport({ scale: 2.0 });
-                    const canvas = document.createElement('canvas');
-                    const context = canvas.getContext('2d');
-                    canvas.height = viewport.height; canvas.width = viewport.width;
-                    await page.render({ canvasContext: context, viewport: viewport }).promise;
-                    source = canvas.toDataURL('image/png');
-                } else {
-                    source = file;
+            const callGeminiAI = async (base64) => {
+                // 【404を回避する最新のエンドポイント構造】
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+                
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{
+                            parts: [
+                                { text: "この予定表から、氏名と稼働時間（開始・終了）をすべて抜き出し、以下のJSON形式で返してください。手書き文字も注意深く読んで。{\"data\": [{\"name\": \"名前\", \"startTime\": \"HH:mm\", \"endTime\": \"HH:mm\"}]}" },
+                                { inline_data: { mime_type: "image/jpeg", data: base64 } }
+                            ]
+                        }]
+                    })
+                });
+
+                const resData = await response.json();
+                if (resData.error) throw new Error(resData.error.message);
+                
+                const jsonStr = resData.candidates[0].content.parts[0].text.match(/\{[\s\S]*\}/)[0];
+                return JSON.parse(jsonStr).data;
+            };
+
+            const handleFile = async (e, type) => {
+                const file = e.target.files[0];
+                if (!file || !apiKey) return alert("APIキーを入力してください");
+                setStatus("AIが解析中...（文字化けを防ぐため高度なスキャンを行っています）");
+                
+                try {
+                    let base64;
+                    if (file.type === "application/pdf") {
+                        const arrayBuffer = await file.arrayBuffer();
+                        const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+                        const page = await pdf.getPage(1);
+                        const canvas = document.createElement('canvas');
+                        const viewport = page.getViewport({ scale: 2.0 });
+                        canvas.height = viewport.height; canvas.width = viewport.width;
+                        await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+                        base64 = canvas.toDataURL('image/jpeg').split(',')[1];
+                    } else {
+                        const reader = new FileReader();
+                        base64 = await new Promise(res => {
+                            reader.readAsDataURL(file);
+                            reader.onload = () => res(reader.result.split(',')[1]);
+                        });
+                    }
+
+                    const extracted = await callGeminiAI(base64);
+                    if (type === 'H') setHelpers([...helpers, ...extracted]);
+                    else setUsers([...users, ...extracted]);
+                    setStatus("解析成功！");
+                    localStorage.setItem('cm_key_vision', apiKey);
+                } catch (err) {
+                    setStatus(`エラー: ${err.message}`);
+                    console.error(err);
                 }
+            };
 
-                const result = await Tesseract.recognize(source, 'jpn');
-                const text = result.data.text;
-                
-                // OCR結果から「名前」「日付」「時間」を推測抽出
-                const times = text.match(/(\d{1,2}[:：]\d{2})/g) || ["09:00", "18:00"];
-                const name = text.split('\n').find(l => l.trim().length > 1 && !l.includes(':')) || "名前を修正してください";
-                
-                registry.push({
-                    id: Date.now(),
-                    type: type,
-                    name: name.replace(/[さん様予定表]/g, '').trim(),
-                    start: times[0]?.replace('：', ':') || "09:00",
-                    end: times[times.length-1]?.replace('：', ':') || "18:00"
-                });
-
-                renderRegistry();
-                status.innerText = "";
-            } catch (e) {
-                status.innerText = "読込エラー";
-            }
-        }
-
-        function renderRegistry() {
-            const list = document.getElementById('registryList');
-            list.innerHTML = registry.map((item, i) => `
-                <div class="p-4 rounded-2xl border ${item.type==='H'?'bg-blue-50 border-blue-100':'bg-emerald-50 border-emerald-100'}">
-                    <div class="flex items-center gap-2 mb-2 text-[10px] font-bold ${item.type==='H'?'text-blue-400':'text-emerald-400'}">
-                        <span>${item.type==='H'?'HELPER':'USER'}</span>
-                    </div>
-                    <input value="${item.name}" onchange="registry[${i}].name=this.value;runMatch()" class="w-full font-black bg-transparent border-b border-slate-300 mb-2 outline-none focus:border-slate-800">
-                    <div class="flex gap-2">
-                        <input type="time" value="${item.start}" onchange="registry[${i}].start=this.value;runMatch()" class="flex-1 text-xs p-1 rounded border">
-                        <input type="time" value="${item.end}" onchange="registry[${i}].end=this.value;runMatch()" class="flex-1 text-xs p-1 rounded border">
-                        <button onclick="registry.splice(${i},1);renderRegistry();runMatch()" class="text-red-400 font-bold px-1">×</button>
-                    </div>
-                </div>
-            `).join('');
-            runMatch();
-        }
-
-        function runMatch() {
-            const helpers = registry.filter(r => r.type === 'H');
-            const users = registry.filter(r => r.type === 'U');
-            const list = document.getElementById('matchList');
-            
-            list.innerHTML = users.map(u => {
+            const matches = [];
+            users.forEach(u => {
                 const hits = helpers.filter(h => {
-                    const timeMatch = h.start <= u.start && h.end >= u.end;
+                    const timeOK = h.startTime <= u.startTime && h.endTime >= u.endTime;
                     const isNG = ngList.some(ng => (ng.u === u.name && ng.h === h.name) || (ng.u === h.name && ng.h === u.name));
-                    return timeMatch && !isNG;
+                    return timeOK && !isNG;
                 });
+                matches.push({ user: u, hits });
+            });
 
-                return `
-                    <div class="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-200">
-                        <div class="flex justify-between items-start mb-4">
-                            <div>
-                                <p class="text-[10px] font-bold text-slate-400 uppercase">Target User</p>
-                                <h3 class="font-black text-slate-800 text-lg tracking-tight">${u.name}</h3>
-                            </div>
-                            <span class="bg-slate-100 px-3 py-1 rounded-full text-[10px] font-bold font-mono">${u.start}-${u.end}</span>
-                        </div>
-                        <div class="space-y-2">
-                            ${hits.map(h => `
-                                <div class="bg-blue-600 text-white p-3 rounded-xl flex justify-between items-center shadow-md animate-in fade-in slide-in-from-bottom-2">
-                                    <span class="font-bold text-sm">👤 ${h.name}</span>
-                                    <span class="text-[9px] font-black uppercase tracking-widest opacity-70">MATCHED</span>
-                                </div>
-                            `).join('') || '<p class="text-xs text-slate-300 italic p-2">対応可能なヘルパーはいません</p>'}
-                        </div>
+            return (
+                <div className="max-w-2xl mx-auto p-6">
+                    <header className="flex justify-between items-center mb-10 bg-white p-6 rounded-[2rem] shadow-sm">
+                        <h1 className="text-3xl font-black italic tracking-tighter">CARE MATCH</h1>
+                        <input type="password" placeholder="AI Studio Key" className="p-2 border rounded-xl text-xs" value={apiKey} onChange={e=>setApiKey(e.target.value)} />
+                    </header>
+
+                    <div class="grid grid-cols-2 gap-4 mb-8">
+                        <label className="bg-blue-600 text-white p-8 rounded-[2.5rem] text-center font-bold shadow-xl active:scale-95 cursor-pointer">
+                            👤 ヘルパー読込
+                            <input type="file" className="hidden" onChange={e=>handleFile(e, 'H')} />
+                        </label>
+                        <label className="bg-emerald-600 text-white p-8 rounded-[2.5rem] text-center font-bold shadow-xl active:scale-95 cursor-pointer">
+                            🏠 利用者読込
+                            <input type="file" className="hidden" onChange={e=>handleFile(e, 'U')} />
+                        </label>
                     </div>
-                `;
-            }).join('');
-        }
 
-        function addNG() {
-            const u = document.getElementById('ngU').value.trim();
-            const h = document.getElementById('ngH').value.trim();
-            if(u && h) {
-                ngList.push({u, h});
-                localStorage.setItem('cm_ng_list', JSON.stringify(ngList));
-                document.getElementById('ngU').value = ""; document.getElementById('ngH').value = "";
-                renderNG(); runMatch();
-            }
-        }
+                    <div className="bg-white p-4 rounded-2xl mb-10 text-center text-sm font-bold text-blue-500 shadow-inner italic">Status: {status}</div>
 
-        function renderNG() {
-            document.getElementById('ngDisplay').innerHTML = ngList.map((ng, i) => `
-                <div class="bg-red-50 text-red-500 border border-red-100 px-3 py-1 rounded-full text-[10px] font-bold flex items-center">
-                    ${ng.u} × ${ng.h} <button onclick="ngList.splice(${i},1);renderNG();runMatch()" class="ml-2 font-black">×</button>
+                    <div className="space-y-6">
+                        <h2 className="text-xs font-black text-slate-300 uppercase tracking-widest px-4">Automatic Matches</h2>
+                        {matches.map((m, i) => (
+                            <div key={i} className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100">
+                                <div className="flex justify-between mb-4 border-b pb-2">
+                                    <span className="font-black text-slate-800">🏠 {m.user.name}</span>
+                                    <span className="text-xs font-bold text-slate-400">{m.user.startTime} - {m.user.endTime}</span>
+                                </div>
+                                <div className="space-y-2">
+                                    {m.hits.map((h, j) => (
+                                        <div key={j} className="bg-blue-50 text-blue-600 p-4 rounded-2xl flex justify-between items-center font-bold">
+                                            <span>👤 {h.name}</span>
+                                            <span className="text-[10px] bg-blue-600 text-white px-3 py-1 rounded-full uppercase">Possible</span>
+                                        </div>
+                                    ))}
+                                    {m.hits.length === 0 && <p className="text-xs text-slate-300 italic">条件に合うヘルパーが見つかりません</p>}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
                 </div>
-            `).join('');
+            );
         }
-        renderNG();
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
     </script>
 </body>
 </html>
