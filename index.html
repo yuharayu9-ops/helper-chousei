@@ -2,32 +2,45 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>CARE MATCH - LOCAL SCAN</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CARE MATCH - SMART LOCAL</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src='https://unpkg.com/tesseract.js@v4.0.1/dist/tesseract.min.js'></script>
 </head>
-<body class="bg-slate-50 p-6 min-h-screen">
-    <div class="max-w-md mx-auto">
-        <header class="text-center mb-10">
-            <h1 class="text-3xl font-black italic text-slate-900 tracking-tighter">CARE MATCH</h1>
-            <p class="text-[10px] font-bold text-blue-500 uppercase tracking-[0.3em]">No-API / On-Device Matching</p>
+<body class="bg-slate-50 p-4 sm:p-8 min-h-screen font-sans text-slate-900">
+    <div class="max-w-2xl mx-auto">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl font-black italic tracking-tighter">CARE MATCH</h1>
+            <p class="text-[10px] font-bold text-blue-600 uppercase tracking-[0.3em]">AI-Free / OCR & NG Management</p>
         </header>
 
-        <div class="grid grid-cols-2 gap-4 mb-10">
-            <label class="bg-blue-600 text-white p-8 rounded-[2.5rem] text-center font-bold shadow-xl active:scale-95 cursor-pointer">
-                <span class="text-2xl block mb-2">👤</span>
-                ヘルパー読込
+        <div class="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-200 mb-8">
+            <h2 class="text-xs font-black text-slate-400 uppercase tracking-widest mb-4 flex items-center">
+                🚫 相性NG設定（名前を入力）
+            </h2>
+            <div class="flex gap-2 mb-4">
+                <input id="ngUser" type="text" placeholder="利用者名" class="flex-1 p-3 bg-slate-50 rounded-xl text-sm border-none outline-none ring-1 ring-slate-200 focus:ring-red-400">
+                <input id="ngHelper" type="text" placeholder="ヘルパー名" class="flex-1 p-3 bg-slate-50 rounded-xl text-sm border-none outline-none ring-1 ring-slate-200 focus:ring-red-400">
+                <button onclick="addNG()" class="bg-red-500 text-white px-6 rounded-xl font-bold text-sm shadow-md active:scale-95 transition-all">登録</button>
+            </div>
+            <div id="ngList" class="flex flex-wrap gap-2"></div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-4 mb-8 text-center">
+            <label class="bg-blue-600 text-white p-6 rounded-[2rem] font-bold shadow-lg active:scale-95 cursor-pointer">
+                <span class="text-2xl block mb-1">👤</span>
+                <span class="text-xs">ヘルパー読込</span>
                 <input type="file" class="hidden" accept="image/*" onchange="processImage(this, 'H')">
             </label>
-            <label class="bg-emerald-600 text-white p-8 rounded-[2.5rem] text-center font-bold shadow-xl active:scale-95 cursor-pointer">
-                <span class="text-2xl block mb-2">🏠</span>
-                利用者読込
+            <label class="bg-emerald-600 text-white p-6 rounded-[2rem] font-bold shadow-lg active:scale-95 cursor-pointer">
+                <span class="text-2xl block mb-1">🏠</span>
+                <span class="text-xs">利用者読込</span>
                 <input type="file" class="hidden" accept="image/*" onchange="processImage(this, 'U')">
             </label>
         </div>
 
-        <div id="status" class="bg-white p-5 rounded-3xl mb-10 text-center text-xs font-bold text-slate-400 border border-slate-100 italic shadow-inner">
-            画像を選んでください（API通信なし）
+        <div id="status" class="bg-white p-4 rounded-2xl mb-8 text-center text-xs font-bold text-slate-400 border italic shadow-inner">
+            画像を解析して自動マッチングします
         </div>
 
         <div id="results" class="space-y-4">
@@ -38,42 +51,54 @@
     <script>
         let helpers = [];
         let users = [];
+        let ngPairs = JSON.parse(localStorage.getItem('cm_ng') || '[]');
+
+        function addNG() {
+            const u = document.getElementById('ngUser').value.trim();
+            const h = document.getElementById('ngHelper').value.trim();
+            if (u && h) {
+                ngPairs.push({u, h});
+                document.getElementById('ngUser').value = '';
+                document.getElementById('ngHelper').value = '';
+                saveNG();
+                renderNG();
+                runMatching();
+            }
+        }
+
+        function saveNG() { localStorage.setItem('cm_ng', JSON.stringify(ngPairs)); }
+        
+        function renderNG() {
+            document.getElementById('ngList').innerHTML = ngPairs.map((pair, i) => `
+                <div class="bg-red-50 text-red-600 px-3 py-1 rounded-full text-[10px] font-bold flex items-center border border-red-100">
+                    ${pair.u} × ${pair.h}
+                    <button onclick="ngPairs.splice(${i},1);saveNG();renderNG();runMatching()" class="ml-2 font-black">×</button>
+                </div>
+            `).join('');
+        }
 
         async function processImage(input, type) {
             const file = input.files[0];
             if (!file) return;
-
             const status = document.getElementById('status');
-            status.innerText = "文字を解析しています... (15秒〜30秒)";
-            status.classList.add('text-blue-500', 'animate-pulse');
-
+            status.innerText = "文字解析中...";
             try {
-                // ブラウザ内で文字を抽出（API不要）
                 const result = await Tesseract.recognize(file, 'jpn+eng');
                 const text = result.data.text;
-                
-                // テキストから「名前」と「時間」を抽出するロジック
                 const data = parseText(text);
-                
                 if (type === 'H') helpers.push(data);
                 else users.push(data);
-
-                status.innerText = "読み込み完了: " + data.name;
-                status.classList.remove('animate-pulse');
+                status.innerText = "読込完了: " + data.name;
                 runMatching();
-            } catch (err) {
-                status.innerText = "エラー: " + err.message;
-            }
+            } catch (err) { status.innerText = "失敗: " + err.message; }
         }
 
         function parseText(text) {
-            // 時間のパターン (HH:mm) を探す
             const times = text.match(/(\d{1,2}[:：]\d{2})/g) || ["09:00", "18:00"];
-            // 最初の行を名前に仮定
-            const name = text.split('\n').find(line => line.trim().length > 1) || "不明なデータ";
-            
+            const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 1);
+            // 固有名詞の抽出はOCRの課題ですが、1行目を名前として扱います
             return {
-                name: name.trim().substring(0, 10),
+                name: lines[0] || "不明",
                 start: times[0] || "09:00",
                 end: times[times.length - 1] || "18:00"
             };
@@ -82,24 +107,38 @@
         function runMatching() {
             const resultDiv = document.getElementById('results');
             const matchHTML = users.map(u => {
-                const available = helpers.filter(h => h.start <= u.start && h.end >= u.end);
+                // 1. 時間が合うヘルパーを抽出
+                // 2. NGリストに載っている組み合わせを除外
+                const available = helpers.filter(h => {
+                    const timeOK = (h.start <= u.start && h.end >= u.end);
+                    const isNG = ngPairs.some(p => 
+                        (p.u === u.name && p.h === h.name) || 
+                        (p.u === h.name && p.h === u.name)
+                    );
+                    return timeOK && !isNG;
+                });
+
                 return `
                     <div class="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100">
                         <div class="flex justify-between items-center mb-4">
                             <span class="font-black text-slate-800 tracking-tight">🏠 ${u.name}</span>
                             <span class="bg-slate-100 px-3 py-1 rounded-full text-[10px] font-bold">${u.start}-${u.end}</span>
                         </div>
-                        ${available.map(h => `
-                            <div class="text-sm font-bold text-blue-600 pl-2 border-l-2 border-blue-500 py-1 my-2">
-                                👤 ${h.name} さん
-                            </div>
-                        `).join('') || '<p class="text-[10px] text-slate-300 italic">可能なヘルパーがいません</p>'}
+                        <div class="space-y-2">
+                            ${available.map(h => `
+                                <div class="text-sm font-bold text-blue-600 bg-blue-50/50 p-3 rounded-xl flex justify-between items-center border border-blue-100">
+                                    <span>👤 ${h.name}</span>
+                                    <span class="text-[9px] uppercase tracking-tighter bg-blue-100 px-2 py-0.5 rounded">Match</span>
+                                </div>
+                            `).join('') || '<p class="text-[10px] text-slate-300 italic p-2">マッチングなし（時間外またはNG）</p>'}
+                        </div>
                     </div>
                 `;
             }).join('');
-            
-            resultDiv.innerHTML = '<h2 class="text-[10px] font-black text-slate-300 uppercase tracking-widest px-2">Matching Analysis</h2>' + matchHTML;
+            resultDiv.innerHTML = '<h2 class="text-[10px] font-black text-slate-300 uppercase tracking-widest px-2 mb-4">Matching Analysis</h2>' + matchHTML;
         }
+
+        renderNG();
     </script>
 </body>
 </html>
