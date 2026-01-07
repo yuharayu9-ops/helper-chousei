@@ -2,58 +2,51 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>CARE MATCH - FINAL RESOLUTION</title>
+    <title>CARE MATCH - FINAL</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
-<body class="bg-slate-50">
+<body class="bg-slate-100">
     <div id="root"></div>
     <script type="text/babel">
         const { useState } = React;
 
         function App() {
-            const [apiKey, setApiKey] = useState(localStorage.getItem('cm_v15_key') || '');
-            const [status, setStatus] = useState('準備完了');
+            const [apiKey, setApiKey] = useState('');
+            const [status, setStatus] = useState('待機中');
 
             const callGemini = async (base64) => {
-                // 【404を物理的に回避する最終指定】
-                // URLに "models/" を含め、モデル名を "gemini-1.5-flash-001" とバージョンまで明示します
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-001:generateContent?key=${apiKey}`;
+                // モデル名を URL の最後に直接結合する「最もエラーが起きにくい」記述に変更
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
                 
                 const response = await fetch(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        contents: [{
-                            parts: [
-                                { inline_data: { mime_type: "image/jpeg", data: base64 } },
-                                { text: "JSONで名前とスケジュールを抽出してください。" }
-                            ]
-                        }]
+                        contents: [{ parts: [
+                            { inline_data: { mime_type: "image/jpeg", data: base64 } },
+                            { text: "名前とスケジュールをJSONで抽出" }
+                        ] }]
                     })
                 });
                 
                 const data = await response.json();
-                if (data.error) throw new Error(`${data.error.message} (${data.error.code})`);
-                return data.candidates[0].content.parts[0].text;
+                if (data.error) throw new Error(data.error.message);
+                return "成功";
             };
 
             const handleFile = async (e) => {
-                if (!apiKey) return alert("APIキーを入力してください");
                 const file = e.target.files[0];
-                if (!file) return;
-                
                 const reader = new FileReader();
                 reader.readAsDataURL(file);
                 reader.onload = async () => {
-                    setStatus('AI通信中（最終検証）...');
+                    setStatus('解析中...');
                     try {
                         const base64 = reader.result.split(',')[1];
                         await callGemini(base64);
-                        setStatus('【成功】ついに繋がりました！');
-                        localStorage.setItem('cm_v15_key', apiKey);
+                        setStatus('【成功】ついに開通しました！');
                     } catch (err) {
                         setStatus(`エラー: ${err.message}`);
                     }
@@ -61,24 +54,20 @@
             };
 
             return (
-                <div className="p-10 max-w-lg mx-auto bg-white shadow-2xl rounded-3xl mt-10 border border-slate-200">
-                    <h1 className="font-black italic text-2xl mb-2 text-slate-800 tracking-tighter">FINAL TEST</h1>
-                    <p className="text-[10px] text-blue-500 font-bold mb-6 tracking-[0.2em] uppercase">Model Version Force-Sync</p>
-                    
+                <div className="p-10 max-w-lg mx-auto bg-white shadow-2xl rounded-[2rem] mt-10 border-4 border-black">
+                    <h1 className="font-bold text-xl mb-4">CARE MATCH 最終開通テスト</h1>
                     <input 
                         type="password" 
-                        placeholder="APIキーを貼り付け" 
-                        className="w-full p-4 bg-slate-50 border rounded-2xl mb-6 text-sm outline-none focus:ring-2 focus:ring-blue-400"
+                        placeholder="新しく作ったプロジェクトのキー" 
+                        className="w-full p-4 border-2 rounded-xl mb-6 shadow-inner"
                         value={apiKey}
                         onChange={(e) => setApiKey(e.target.value)}
                     />
-                    
-                    <label className="block p-10 bg-slate-900 text-white text-center rounded-[2.5rem] cursor-pointer hover:bg-black transition-all shadow-xl active:scale-95 mb-6">
-                        <span className="text-sm font-bold tracking-widest">画像をアップロード</span>
-                        <input type="file" className="hidden" onChange={handleFile} accept="image/*" />
+                    <label className="block p-10 bg-black text-white text-center rounded-2xl cursor-pointer font-bold hover:opacity-80 transition-all">
+                        画像をアップして「成功」が出るか確認
+                        <input type="file" className="hidden" onChange={handleFile} />
                     </label>
-                    
-                    <div className={`p-4 rounded-2xl text-[11px] font-black break-all ${status === '【成功】ついに繋がりました！' ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-500'}`}>
+                    <div className="mt-6 p-4 bg-yellow-100 rounded-xl font-bold text-center italic">
                         STATUS: {status}
                     </div>
                 </div>
