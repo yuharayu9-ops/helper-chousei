@@ -2,34 +2,33 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>CARE MATCH FINAL - Stable</title>
+    <title>CARE MATCH PRO - Stable</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
-<body class="bg-slate-50">
+<body class="bg-[#f8fafc]">
     <div id="root"></div>
     <script type="text/babel">
         const { useState, useEffect } = React;
 
         function App() {
-            const [helpers, setHelpers] = useState(() => JSON.parse(localStorage.getItem('cm_st_h') || '[]'));
-            const [users, setUsers] = useState(() => JSON.parse(localStorage.getItem('cm_st_u') || '[]'));
-            const [apiKey, setApiKey] = useState(() => localStorage.getItem('cm_st_k') || '');
+            const [helpers, setHelpers] = useState(() => JSON.parse(localStorage.getItem('cm_final_h') || '[]'));
+            const [users, setUsers] = useState(() => JSON.parse(localStorage.getItem('cm_final_u') || '[]'));
+            const [apiKey, setApiKey] = useState(() => localStorage.getItem('cm_final_k') || '');
             const [loading, setLoading] = useState(false);
             const [status, setStatus] = useState('Ready');
 
             useEffect(() => {
-                localStorage.setItem('cm_st_h', JSON.stringify(helpers));
-                localStorage.setItem('cm_st_u', JSON.stringify(users));
-                localStorage.setItem('cm_st_k', apiKey);
+                localStorage.setItem('cm_final_h', JSON.stringify(helpers));
+                localStorage.setItem('cm_final_u', JSON.stringify(users));
+                localStorage.setItem('cm_final_k', apiKey);
             }, [helpers, users, apiKey]);
 
             const callGemini = async (base64, prompt) => {
-                // 【修正ポイント】モデル名を正式なフルネーム "models/gemini-1.5-flash-latest" に変更
-                // これにより "not found" エラーを回避します
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`;
+                // 【超重要】URLを "v1" (正式版) に変更し、モデル名から余計なものを排除
+                const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
                 
                 const response = await fetch(url, {
                     method: 'POST',
@@ -38,13 +37,9 @@
                         contents: [{
                             parts: [
                                 { inline_data: { mime_type: "image/jpeg", data: base64 } },
-                                { text: prompt }
+                                { text: prompt + "\n必ずJSON形式のみで回答してください。" }
                             ]
-                        }],
-                        generationConfig: {
-                            temperature: 1,
-                            responseMimeType: "application/json"
-                        }
+                        }]
                     })
                 });
                 
@@ -63,14 +58,15 @@
                 reader.readAsDataURL(file);
                 reader.onload = async () => {
                     const base64 = reader.result.split(',')[1];
-                    const prompt = "JSONで出力してください。氏名(name)、予定(schedule:[{date,startTime,endTime}])。2024年として扱います。";
+                    const prompt = "画像から、氏名(name)と、日付・開始時間・終了時間のリスト(schedule)を抜き出してください。";
 
                     try {
                         const jsonText = await callGemini(base64, prompt);
-                        const res = JSON.parse(jsonText);
+                        const cleanJson = jsonText.match(/\{[\s\S]*\}|\[[\s\S]*\]/)[0];
+                        const res = JSON.parse(cleanJson);
                         if (type === 'HELPER') setHelpers([...helpers, { id: Date.now().toString(), ...res }]);
                         else setUsers([...users, { id: Date.now().toString(), ...res }]);
-                        setStatus('成功！');
+                        setStatus('読み込み成功！');
                     } catch (err) {
                         setStatus(`エラー: ${err.message}`);
                     } finally { setLoading(false); }
@@ -78,34 +74,33 @@
             };
 
             return (
-                <div className="max-w-2xl mx-auto my-10 bg-white shadow-2xl rounded-3xl overflow-hidden p-10 border border-slate-200">
-                    <div className="mb-8 border-b pb-6 flex justify-between items-center">
-                        <h1 className="font-black italic text-2xl text-slate-800 tracking-tighter">CARE MATCH PRO</h1>
-                        <input type="password" placeholder="API Key" className="bg-slate-100 p-2 rounded text-xs w-48 outline-none border" value={apiKey} onChange={(e)=>setApiKey(e.target.value)} />
-                    </div>
+                <div className="max-w-2xl mx-auto my-10 bg-white shadow-2xl rounded-[3rem] overflow-hidden p-10 border border-slate-200">
+                    <header className="mb-8 flex justify-between items-center border-b pb-6">
+                        <h1 className="font-black italic text-2xl text-slate-800 tracking-tighter">CARE MATCH</h1>
+                        <input type="password" placeholder="API Key" className="bg-slate-50 p-2 rounded-xl text-xs w-48 outline-none border" value={apiKey} onChange={(e)=>setApiKey(e.target.value)} />
+                    </header>
 
                     <div className="grid grid-cols-2 gap-6 mb-10">
-                        <label className="flex flex-col items-center justify-center p-8 bg-blue-500 text-white rounded-[2rem] cursor-pointer hover:bg-blue-600 active:scale-95 transition-all">
-                            <span className="text-3xl mb-1">👤</span>
-                            <span className="font-bold text-sm text-center italic uppercase tracking-tighter">Helper Scan</span>
+                        <label className="flex flex-col items-center justify-center p-8 bg-blue-600 text-white rounded-[2.5rem] cursor-pointer hover:bg-blue-700 transition-all shadow-lg active:scale-95">
+                            <span className="text-4xl mb-2">👤</span>
+                            <span className="font-bold text-xs uppercase tracking-widest">ヘルパー追加</span>
                             <input type="file" className="hidden" onChange={(e)=>handleFileUpload(e, 'HELPER')} />
                         </label>
-                        <label className="flex flex-col items-center justify-center p-8 bg-emerald-500 text-white rounded-[2rem] cursor-pointer hover:bg-emerald-600 active:scale-95 transition-all">
-                            <span className="text-3xl mb-1">🏠</span>
-                            <span className="font-bold text-sm text-center italic uppercase tracking-tighter">User Scan</span>
+                        <label className="flex flex-col items-center justify-center p-8 bg-emerald-600 text-white rounded-[2.5rem] cursor-pointer hover:bg-emerald-700 transition-all shadow-lg active:scale-95">
+                            <span className="text-4xl mb-2">🏠</span>
+                            <span className="font-bold text-xs uppercase tracking-widest">利用者追加</span>
                             <input type="file" className="hidden" onChange={(e)=>handleFileUpload(e, 'USER')} />
                         </label>
                     </div>
 
-                    <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100">
-                        <div className="flex justify-between items-center mb-4 px-2">
-                            <h2 className="font-bold text-slate-500 text-xs tracking-widest uppercase">Live Status</h2>
-                            <span className={`text-[10px] font-bold px-3 py-1 rounded-full ${status === '成功！' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'}`}>{status}</span>
-                        </div>
-                        <div className="space-y-3">
-                            {helpers.length > 0 && <div className="p-4 bg-white rounded-2xl shadow-sm text-sm font-bold border border-blue-100 text-blue-700 italic">✓ {helpers[helpers.length-1].name} さんを追加しました</div>}
-                            {users.length > 0 && <div className="p-4 bg-white rounded-2xl shadow-sm text-sm font-bold border border-emerald-100 text-emerald-700 italic">✓ {users[users.length-1].name} さんを追加しました</div>}
-                        </div>
+                    <div className={`p-6 rounded-[2rem] text-center font-bold mb-6 transition-colors ${status === '読み込み成功！' ? 'bg-green-50 text-green-600' : 'bg-slate-50 text-slate-400'}`}>
+                        {status}
+                    </div>
+
+                    <div className="space-y-4">
+                        <p className="text-[10px] font-black text-slate-300 uppercase tracking-[0.3em] px-2">Registered Data</p>
+                        {helpers.map(h => <div key={h.id} className="p-4 bg-white border border-slate-100 shadow-sm rounded-2xl font-bold text-slate-600 flex justify-between"><span>👤 {h.name || '解析中...'}</span></div>)}
+                        {users.map(u => <div key={u.id} className="p-4 bg-white border border-slate-100 shadow-sm rounded-2xl font-bold text-slate-600 flex justify-between"><span>🏠 {u.name || '解析中...'}</span></div>)}
                     </div>
                 </div>
             );
