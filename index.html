@@ -2,26 +2,25 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>CARE MATCH - FINAL STABLE</title>
+    <title>CARE MATCH - FINAL RESOLUTION</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
-<body class="bg-slate-100">
+<body class="bg-slate-50">
     <div id="root"></div>
     <script type="text/babel">
         const { useState } = React;
 
         function App() {
-            const [helpers, setHelpers] = useState([]);
-            const [apiKey, setApiKey] = useState(localStorage.getItem('cm_key') || '');
-            const [status, setStatus] = useState('待機中');
+            const [apiKey, setApiKey] = useState(localStorage.getItem('cm_v15_key') || '');
+            const [status, setStatus] = useState('準備完了');
 
             const callGemini = async (base64) => {
-                // 【404対策の決定打】
-                // モデル名を URL の一部としてではなく、極力シンプルに指定します
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+                // 【404を物理的に回避する最終指定】
+                // URLに "models/" を含め、モデル名を "gemini-1.5-flash-001" とバージョンまで明示します
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-001:generateContent?key=${apiKey}`;
                 
                 const response = await fetch(url, {
                     method: 'POST',
@@ -30,7 +29,7 @@
                         contents: [{
                             parts: [
                                 { inline_data: { mime_type: "image/jpeg", data: base64 } },
-                                { text: "JSON形式で、名前(name)とスケジュール(schedule)を抽出してください。" }
+                                { text: "JSONで名前とスケジュールを抽出してください。" }
                             ]
                         }]
                     })
@@ -44,41 +43,43 @@
             const handleFile = async (e) => {
                 if (!apiKey) return alert("APIキーを入力してください");
                 const file = e.target.files[0];
+                if (!file) return;
+                
                 const reader = new FileReader();
                 reader.readAsDataURL(file);
                 reader.onload = async () => {
-                    setStatus('解析中...');
+                    setStatus('AI通信中（最終検証）...');
                     try {
                         const base64 = reader.result.split(',')[1];
-                        const result = await callGemini(base64);
-                        setStatus('成功！');
-                        // 簡易表示
-                        setHelpers(prev => [...prev, result]);
-                        localStorage.setItem('cm_key', apiKey);
+                        await callGemini(base64);
+                        setStatus('【成功】ついに繋がりました！');
+                        localStorage.setItem('cm_v15_key', apiKey);
                     } catch (err) {
-                        setStatus(`エラー詳細: ${err.message}`);
+                        setStatus(`エラー: ${err.message}`);
                     }
                 };
             };
 
             return (
-                <div className="p-10 max-w-lg mx-auto bg-white shadow-xl rounded-3xl mt-10">
-                    <h1 className="text-xl font-bold mb-6">CARE MATCH 最終検証版</h1>
+                <div className="p-10 max-w-lg mx-auto bg-white shadow-2xl rounded-3xl mt-10 border border-slate-200">
+                    <h1 className="font-black italic text-2xl mb-2 text-slate-800 tracking-tighter">FINAL TEST</h1>
+                    <p className="text-[10px] text-blue-500 font-bold mb-6 tracking-[0.2em] uppercase">Model Version Force-Sync</p>
+                    
                     <input 
                         type="password" 
-                        placeholder="ここにAPIキーを貼り付け" 
-                        className="w-full p-3 border rounded-xl mb-6 text-sm"
+                        placeholder="APIキーを貼り付け" 
+                        className="w-full p-4 bg-slate-50 border rounded-2xl mb-6 text-sm outline-none focus:ring-2 focus:ring-blue-400"
                         value={apiKey}
                         onChange={(e) => setApiKey(e.target.value)}
                     />
-                    <div className="grid grid-cols-1 gap-4">
-                        <label className="p-10 bg-blue-600 text-white text-center rounded-3xl cursor-pointer font-bold">
-                            画像をアップロードしてテスト
-                            <input type="file" className="hidden" onChange={handleFile} accept="image/*" />
-                        </label>
-                    </div>
-                    <div className="mt-6 p-4 bg-slate-50 rounded-xl text-sm font-mono break-all">
-                        ステータス: <span className="text-blue-600 font-bold">{status}</span>
+                    
+                    <label className="block p-10 bg-slate-900 text-white text-center rounded-[2.5rem] cursor-pointer hover:bg-black transition-all shadow-xl active:scale-95 mb-6">
+                        <span className="text-sm font-bold tracking-widest">画像をアップロード</span>
+                        <input type="file" className="hidden" onChange={handleFile} accept="image/*" />
+                    </label>
+                    
+                    <div className={`p-4 rounded-2xl text-[11px] font-black break-all ${status === '【成功】ついに繋がりました！' ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-500'}`}>
+                        STATUS: {status}
                     </div>
                 </div>
             );
