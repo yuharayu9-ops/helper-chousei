@@ -19,40 +19,39 @@
 
             const callGemini = async (base64) => {
                 // 【404根絶の最終回答】
-                // URLに :generateContent を含めず、パスの中に組み込む最新形式を試行します
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
-                
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{
-                            parts: [
-                                { text: "この画像から「氏名」と「予定（日付、開始、終了）」を抽出し、JSON形式で出力してください。" },
-                                { inline_data: { mime_type: "image/jpeg", data: base64 } }
-                            ]
-                        }],
-                        generationConfig: {
-                            temperature: 0.4,
-                            topP: 1,
-                            topK: 32,
-                            maxOutputTokens: 2048,
-                        }
-                    })
-                });
-                
-                const data = await response.json();
-                
-                // エラー内容をより詳しく解析
-                if (data.error) {
-                    throw new Error(`${data.error.message} (${data.error.status})`);
-                }
-                
-                if (!data.candidates || !data.candidates[0]) {
-                    throw new Error("AIからの応答が空でした。");
-                }
+                // 1.5-flash が「見つからない」と言われる場合、1.5-pro に強制スイッチして試行します
+                const models = ["gemini-1.5-flash", "gemini-1.5-pro"];
+                let lastError = "";
 
-                return "解析成功";
+                for (const model of models) {
+                    try {
+                        setStatus(`🔄 モデル ${model} で接続試行中...`);
+                        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+                        
+                        const response = await fetch(url, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                contents: [{
+                                    parts: [
+                                        { text: "抽出: 名前, 予定(日付,開始,終了) JSON形式" },
+                                        { inline_data: { mime_type: "image/jpeg", data: base64 } }
+                                    ]
+                                }]
+                            })
+                        });
+                        
+                        const data = await response.json();
+                        if (data.error) {
+                            lastError = data.error.message;
+                            continue; // 次のモデル（Pro）を試す
+                        }
+                        return "成功";
+                    } catch (e) {
+                        lastError = e.message;
+                    }
+                }
+                throw new Error(lastError);
             };
 
             const handleFile = async (e) => {
@@ -66,7 +65,7 @@
                     try {
                         const base64 = reader.result.split(',')[1];
                         await callGemini(base64);
-                        setStatus('✅ 【大成功】ついに通信が通りました！');
+                        setStatus('✅ 【大成功】通信が通りました！');
                         localStorage.setItem('last_resort_key', apiKey);
                     } catch (err) {
                         setStatus(`❌ 失敗: ${err.message}`);
@@ -75,9 +74,9 @@
             };
 
             return (
-                <div className="bg-slate-800 p-8 rounded-[2.5rem] shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-slate-700 text-white">
-                    <h1 className="text-2xl font-black italic mb-2 text-center bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent uppercase tracking-tighter">Care Match Final</h1>
-                    <p className="text-[10px] text-center text-slate-400 mb-8 font-bold tracking-[0.3em] uppercase">V1BETA Protocol Sync</p>
+                <div className="bg-slate-800 p-8 rounded-[2.5rem] shadow-2xl border border-slate-700 text-white font-sans">
+                    <h1 className="text-2xl font-black italic mb-2 text-center text-blue-400 uppercase tracking-tighter">Care Match Final</h1>
+                    <p className="text-[10px] text-center text-slate-400 mb-8 font-bold tracking-[0.3em] uppercase">Multi-Model Sync</p>
                     
                     <input 
                         type="password" 
