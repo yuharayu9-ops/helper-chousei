@@ -1,435 +1,117 @@
-import React, { useState, useEffect } from 'react';
-import { createRoot } from 'react-dom/client';
-import { GoogleGenAI, Type } from "@google/genai";
-import { 
-  LayoutDashboard, Users, Wand2, Calendar, 
-  Upload, Loader2, Trash2, ArrowRight,
-  Info, X, Printer, CheckCircle, Clock, MapPin
-} from 'lucide-react';
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>CARE MATCH FINAL - Stable</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-50">
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect } = React;
 
-// ==========================================
-// 1. 基本設定（サービスの種類など）
-// ==========================================
-enum ServiceType {
-  MOBILE = '移動支援',
-  BEHAVIOR = '行動援護',
-  SEVERE = '重度訪問介護',
-  HOME = '居宅介護',
-}
+        function App() {
+            const [helpers, setHelpers] = useState(() => JSON.parse(localStorage.getItem('cm_st_h') || '[]'));
+            const [users, setUsers] = useState(() => JSON.parse(localStorage.getItem('cm_st_u') || '[]'));
+            const [apiKey, setApiKey] = useState(() => localStorage.getItem('cm_st_k') || '');
+            const [loading, setLoading] = useState(false);
+            const [status, setStatus] = useState('Ready');
 
-enum PersonType { HELPER = 'HELPER', USER = 'USER' }
+            useEffect(() => {
+                localStorage.setItem('cm_st_h', JSON.stringify(helpers));
+                localStorage.setItem('cm_st_u', JSON.stringify(users));
+                localStorage.setItem('cm_st_k', apiKey);
+            }, [helpers, users, apiKey]);
 
-interface TimeSlot {
-  date: string;
-  startTime: string;
-  endTime: string;
-}
-
-interface Helper {
-  id: string;
-  name: string;
-  availability: TimeSlot[];
-  services: ServiceType[];
-}
-
-interface User {
-  id: string;
-  name: string;
-  requests: TimeSlot[];
-  requiredService: ServiceType;
-}
-
-interface MatchResult {
-  id: string;
-  date: string;
-  startTime: string;
-  endTime: string;
-  helperName: string;
-  userName: string;
-  serviceType: string;
-  reason: string;
-}
-
-// ==========================================
-// 2. AIの頭脳（Gemini APIとの連携）
-// ==========================================
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
-const parseImage = async (base64: string, type: PersonType) => {
-  const prompt = type === PersonType.HELPER 
-    ? "画像からヘルパーの氏名、対応可能なサービス（移動支援・行動援護・重度訪問介護・居宅介護から選択）、稼働可能時間を抽出してJSONで出してください。2024年として扱います。"
-    : "画像から利用者の氏名、希望するサービス名、利用希望時間を抽出してJSONで出してください。2024年として扱います。";
-
-  const response = await ai.models.generateContent({
-    model: "gemini-3-flash-preview",
-    contents: {
-      parts: [{ inlineData: { mimeType: "image/jpeg", data: base64 } }, { text: prompt }]
-    },
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          name: { type: Type.STRING },
-          services: { type: Type.ARRAY, items: { type: Type.STRING } },
-          service: { type: Type.STRING },
-          schedule: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                date: { type: Type.STRING },
-                startTime: { type: Type.STRING },
-                endTime: { type: Type.STRING }
-              },
-              required: ["date", "startTime", "endTime"]
-            }
-          }
-        },
-        required: ["schedule"]
-      }
-    }
-  });
-  return JSON.parse(response.text || "{}");
-};
-
-const runAutoMatching = async (helpers: Helper[], users: User[]) => {
-  const prompt = `以下の介護スタッフと利用者のリストから、時間が重なり、かつサービス内容が一致する組み合わせを作成してください。
-  特に「移動支援」「行動援護」「重度訪問介護」「居宅介護」の種別を尊重してください。
-  ヘルパー情報: ${JSON.stringify(helpers)}
-  利用者情報: ${JSON.stringify(users)}
-  結果はJSONのリストで返してください。`;
-
-  const response = await ai.models.generateContent({
-    model: "gemini-3-pro-preview",
-    contents: prompt,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: {
-            date: { type: Type.STRING },
-            startTime: { type: Type.STRING },
-            endTime: { type: Type.STRING },
-            helperName: { type: Type.STRING },
-            userName: { type: Type.STRING },
-            serviceType: { type: Type.STRING },
-            reason: { type: Type.STRING }
-          }
-        }
-      }
-    }
-  });
-  return JSON.parse(response.text || "[]");
-};
-
-// ==========================================
-// 3. アプリ本体の画面（UI）
-// ==========================================
-const App = () => {
-  const [helpers, setHelpers] = useState<Helper[]>([]);
-  const [users, setUsers] = useState<User[]>([]);
-  const [matches, setMatches] = useState<MatchResult[]>([]);
-  const [activeTab, setActiveTab] = useState('input');
-  const [loading, setLoading] = useState(false);
-  const [showGuide, setShowGuide] = useState(true);
-
-  // 起動時に保存データを読み込む
-  useEffect(() => {
-    const saved = localStorage.getItem('carematch_v2_data');
-    if (saved) {
-      const { h, u, m } = JSON.parse(saved);
-      setHelpers(h || []); setUsers(u || []); setMatches(m || []);
-      if (h?.length > 0 || u?.length > 0) setShowGuide(false);
-    }
-  }, []);
-
-  const saveData = (h = helpers, u = users, m = matches) => {
-    localStorage.setItem('carematch_v2_data', JSON.stringify({ h, u, m }));
-  };
-
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: PersonType) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setLoading(true);
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = async () => {
-      const base64 = (reader.result as string).split(',')[1];
-      try {
-        const res = await parseImage(base64, type);
-        if (type === PersonType.HELPER) {
-          const newH = [...helpers, { 
-            id: Date.now().toString(), 
-            name: res.name || 'ヘルパーさん', 
-            availability: res.schedule,
-            services: res.services || [ServiceType.HOME]
-          }];
-          setHelpers(newH); saveData(newH);
-        } else {
-          const newU = [...users, { 
-            id: Date.now().toString(), 
-            name: res.name || '利用者さん', 
-            requests: res.schedule,
-            requiredService: res.service || ServiceType.HOME
-          }];
-          setUsers(newU); saveData(undefined, newU);
-        }
-      } catch (err) {
-        alert("画像の読み取りに失敗しました。文字がはっきり写っているか確認してください。");
-      } finally {
-        setLoading(false);
-        e.target.value = ""; // 入力をリセット
-      }
-    };
-  };
-
-  const startMatching = async () => {
-    if (helpers.length === 0 || users.length === 0) return alert("ヘルパーと利用者の両方のデータを入力してください");
-    setLoading(true);
-    try {
-      const res = await runAutoMatching(helpers, users);
-      const formatted = res.map((r: any, i: number) => ({ ...r, id: i.toString() }));
-      setMatches(formatted);
-      saveData(undefined, undefined, formatted);
-      setActiveTab('result');
-    } catch (err) {
-      alert("マッチング計算に失敗しました。時間をおいて試してください。");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const clearAll = () => {
-    if(confirm("すべてのデータを消去しますか？")) {
-      setHelpers([]); setUsers([]); setMatches([]);
-      localStorage.removeItem('carematch_v2_data');
-      setShowGuide(true);
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 pb-20">
-      {/* ナビゲーション */}
-      <nav className="bg-indigo-600 text-white p-4 sticky top-0 z-50 shadow-md no-print">
-        <div className="max-w-6xl mx-auto flex justify-between items-center">
-          <div className="flex items-center gap-2">
-            <Calendar className="bg-white text-indigo-600 p-1 rounded-md" size={28} />
-            <h1 className="text-xl font-bold tracking-tight">CareMatch AI</h1>
-          </div>
-          <div className="flex bg-indigo-700/50 p-1 rounded-xl">
-            <button 
-              onClick={() => setActiveTab('input')} 
-              className={`px-6 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'input' ? 'bg-white text-indigo-700' : 'hover:bg-indigo-500 text-white/80'}`}
-            >
-              データ入力
-            </button>
-            <button 
-              onClick={() => setActiveTab('result')} 
-              className={`px-6 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'result' ? 'bg-white text-indigo-700' : 'hover:bg-indigo-500 text-white/80'}`}
-            >
-              マッチング結果
-            </button>
-          </div>
-        </div>
-      </nav>
-
-      {/* 使い方案内 */}
-      {showGuide && activeTab === 'input' && (
-        <div className="max-w-4xl mx-auto mt-8 p-6 bg-white rounded-3xl border border-indigo-100 shadow-sm relative no-print">
-          <button onClick={() => setShowGuide(false)} className="absolute top-4 right-4 text-slate-300 hover:text-slate-600"><X size={20}/></button>
-          <h2 className="text-lg font-bold text-indigo-900 mb-4 flex items-center gap-2"><Info size={20} className="text-indigo-500"/> 初めての方へ：使い方</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
-            <div className="bg-indigo-50/50 p-4 rounded-2xl">
-              <div className="bg-indigo-600 text-white w-6 h-6 rounded-full flex items-center justify-center font-bold mb-2">1</div>
-              <p>FAXや予定表をスマホで撮ってアップロードします。</p>
-            </div>
-            <div className="bg-indigo-50/50 p-4 rounded-2xl">
-              <div className="bg-indigo-600 text-white w-6 h-6 rounded-full flex items-center justify-center font-bold mb-2">2</div>
-              <p>AIが文字を読み取り、リストを作成します。</p>
-            </div>
-            <div className="bg-indigo-50/50 p-4 rounded-2xl">
-              <div className="bg-indigo-600 text-white w-6 h-6 rounded-full flex items-center justify-center font-bold mb-2">3</div>
-              <p>「マッチング開始」で、AIが最適なパズルを解きます。</p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <main className="max-w-6xl mx-auto p-6">
-        {activeTab === 'input' && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-            {/* アップロード操作 */}
-            <div className="lg:col-span-4 space-y-6">
-              <div className="bg-white p-6 rounded-[32px] shadow-sm border border-slate-200">
-                <h3 className="font-bold text-slate-800 mb-6 flex items-center gap-2">書類を読み込む</h3>
+            const callGemini = async (base64, prompt) => {
+                // 【修正ポイント】モデル名を正式なフルネーム "models/gemini-1.5-flash-latest" に変更
+                // これにより "not found" エラーを回避します
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`;
                 
-                <div className="space-y-6">
-                  <div>
-                    <p className="text-xs font-bold text-indigo-600 mb-2">① ヘルパーさんの予定表</p>
-                    <label className="group flex flex-col items-center justify-center w-full border-2 border-dashed border-slate-200 rounded-2xl p-6 cursor-pointer hover:bg-indigo-50 hover:border-indigo-300 transition-all">
-                      <Upload className="text-slate-300 group-hover:text-indigo-500 mb-2 transition-colors" size={32}/>
-                      <span className="text-xs font-bold text-slate-500 group-hover:text-indigo-600">写真を選択</span>
-                      <input type="file" className="hidden" onChange={(e) => handleFileUpload(e, PersonType.HELPER)} accept="image/*" />
-                    </label>
-                  </div>
-
-                  <div>
-                    <p className="text-xs font-bold text-emerald-600 mb-2">② 利用者さんの希望表</p>
-                    <label className="group flex flex-col items-center justify-center w-full border-2 border-dashed border-slate-200 rounded-2xl p-6 cursor-pointer hover:bg-emerald-50 hover:border-emerald-300 transition-all">
-                      <Upload className="text-slate-300 group-hover:text-emerald-500 mb-2 transition-colors" size={32}/>
-                      <span className="text-xs font-bold text-slate-500 group-hover:text-emerald-600">写真を選択</span>
-                      <input type="file" className="hidden" onChange={(e) => handleFileUpload(e, PersonType.USER)} accept="image/*" />
-                    </label>
-                  </div>
-                </div>
-
-                {loading && (
-                  <div className="mt-8 p-4 bg-indigo-50 rounded-2xl flex items-center justify-center gap-3 text-indigo-600 font-bold animate-pulse">
-                    <Loader2 className="animate-spin" size={20} /> AIが解析しています...
-                  </div>
-                )}
-              </div>
-
-              <button 
-                onClick={startMatching}
-                disabled={loading || helpers.length === 0 || users.length === 0}
-                className="w-full bg-indigo-600 text-white py-6 rounded-3xl font-black text-lg shadow-xl shadow-indigo-200 flex items-center justify-center gap-3 hover:bg-indigo-700 disabled:opacity-50 disabled:bg-slate-300 disabled:shadow-none transition-all"
-              >
-                <Wand2/> マッチングを開始
-              </button>
-
-              <button onClick={clearAll} className="w-full text-slate-400 hover:text-red-500 text-xs font-bold transition-colors">
-                すべてのデータをリセット
-              </button>
-            </div>
-
-            {/* 解析済みリスト */}
-            <div className="lg:col-span-8 space-y-8">
-              <div className="bg-white p-6 rounded-[32px] border border-slate-200 shadow-sm">
-                <div className="flex justify-between items-center mb-6">
-                  <h3 className="font-bold text-slate-800 flex items-center gap-2">
-                    <Users size={20} className="text-indigo-500"/>
-                    登録済みリスト
-                  </h3>
-                </div>
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{
+                            parts: [
+                                { inline_data: { mime_type: "image/jpeg", data: base64 } },
+                                { text: prompt }
+                            ]
+                        }],
+                        generationConfig: {
+                            temperature: 1,
+                            responseMimeType: "application/json"
+                        }
+                    })
+                });
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* ヘルパーリスト */}
-                  <div className="space-y-3">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">ヘルパー ({helpers.length}名)</p>
-                    {helpers.map(h => (
-                      <div key={h.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 relative group transition-all hover:bg-white hover:shadow-md">
-                        <div className="font-bold text-sm text-slate-700">{h.name}</div>
-                        <div className="mt-2 space-y-1">
-                          {h.availability.slice(0, 3).map((s, i) => (
-                            <div key={i} className="text-[10px] text-slate-500 flex items-center gap-1">
-                              <Clock size={10}/> {s.date} {s.startTime}-{s.endTime}
-                            </div>
-                          ))}
-                          {h.availability.length > 3 && <p className="text-[10px] text-indigo-400 font-bold">他 {h.availability.length - 3} 件の枠</p>}
-                        </div>
-                        <button onClick={() => { const n = helpers.filter(x => x.id !== h.id); setHelpers(n); saveData(n); }} className="absolute top-3 right-3 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16}/></button>
-                      </div>
-                    ))}
-                    {helpers.length === 0 && <p className="text-xs text-slate-300 text-center py-8 bg-slate-50/50 rounded-2xl">ヘルパーの予定表を読み込んでください</p>}
-                  </div>
+                const data = await response.json();
+                if (data.error) throw new Error(data.error.message);
+                return data.candidates[0].content.parts[0].text;
+            };
 
-                  {/* 利用者リスト */}
-                  <div className="space-y-3">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">利用者 ({users.length}名)</p>
-                    {users.map(u => (
-                      <div key={u.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 relative group transition-all hover:bg-white hover:shadow-md">
-                        <div className="flex justify-between items-start">
-                          <div className="font-bold text-sm text-slate-700">{u.name}</div>
-                          <span className="text-[9px] bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-bold">{u.requiredService}</span>
+            const handleFileUpload = async (e, type) => {
+                const file = e.target.files[0];
+                if (!file || !apiKey) return alert("APIキーを入力してください");
+                setLoading(true);
+                setStatus('AIが解析中...');
+                
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = async () => {
+                    const base64 = reader.result.split(',')[1];
+                    const prompt = "JSONで出力してください。氏名(name)、予定(schedule:[{date,startTime,endTime}])。2024年として扱います。";
+
+                    try {
+                        const jsonText = await callGemini(base64, prompt);
+                        const res = JSON.parse(jsonText);
+                        if (type === 'HELPER') setHelpers([...helpers, { id: Date.now().toString(), ...res }]);
+                        else setUsers([...users, { id: Date.now().toString(), ...res }]);
+                        setStatus('成功！');
+                    } catch (err) {
+                        setStatus(`エラー: ${err.message}`);
+                    } finally { setLoading(false); }
+                };
+            };
+
+            return (
+                <div className="max-w-2xl mx-auto my-10 bg-white shadow-2xl rounded-3xl overflow-hidden p-10 border border-slate-200">
+                    <div className="mb-8 border-b pb-6 flex justify-between items-center">
+                        <h1 className="font-black italic text-2xl text-slate-800 tracking-tighter">CARE MATCH PRO</h1>
+                        <input type="password" placeholder="API Key" className="bg-slate-100 p-2 rounded text-xs w-48 outline-none border" value={apiKey} onChange={(e)=>setApiKey(e.target.value)} />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-6 mb-10">
+                        <label className="flex flex-col items-center justify-center p-8 bg-blue-500 text-white rounded-[2rem] cursor-pointer hover:bg-blue-600 active:scale-95 transition-all">
+                            <span className="text-3xl mb-1">👤</span>
+                            <span className="font-bold text-sm text-center italic uppercase tracking-tighter">Helper Scan</span>
+                            <input type="file" className="hidden" onChange={(e)=>handleFileUpload(e, 'HELPER')} />
+                        </label>
+                        <label className="flex flex-col items-center justify-center p-8 bg-emerald-500 text-white rounded-[2rem] cursor-pointer hover:bg-emerald-600 active:scale-95 transition-all">
+                            <span className="text-3xl mb-1">🏠</span>
+                            <span className="font-bold text-sm text-center italic uppercase tracking-tighter">User Scan</span>
+                            <input type="file" className="hidden" onChange={(e)=>handleFileUpload(e, 'USER')} />
+                        </label>
+                    </div>
+
+                    <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100">
+                        <div className="flex justify-between items-center mb-4 px-2">
+                            <h2 className="font-bold text-slate-500 text-xs tracking-widest uppercase">Live Status</h2>
+                            <span className={`text-[10px] font-bold px-3 py-1 rounded-full ${status === '成功！' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'}`}>{status}</span>
                         </div>
-                        <div className="mt-2 space-y-1">
-                          {u.requests.slice(0, 3).map((s, i) => (
-                            <div key={i} className="text-[10px] text-slate-500 flex items-center gap-1">
-                              <MapPin size={10}/> {s.date} {s.startTime}-{s.endTime}
-                            </div>
-                          ))}
-                          {u.requests.length > 3 && <p className="text-[10px] text-emerald-400 font-bold">他 {u.requests.length - 3} 件の枠</p>}
+                        <div className="space-y-3">
+                            {helpers.length > 0 && <div className="p-4 bg-white rounded-2xl shadow-sm text-sm font-bold border border-blue-100 text-blue-700 italic">✓ {helpers[helpers.length-1].name} さんを追加しました</div>}
+                            {users.length > 0 && <div className="p-4 bg-white rounded-2xl shadow-sm text-sm font-bold border border-emerald-100 text-emerald-700 italic">✓ {users[users.length-1].name} さんを追加しました</div>}
                         </div>
-                        <button onClick={() => { const n = users.filter(x => x.id !== u.id); setUsers(n); saveData(undefined, n); }} className="absolute top-3 right-3 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16}/></button>
-                      </div>
-                    ))}
-                    {users.length === 0 && <p className="text-xs text-slate-300 text-center py-8 bg-slate-50/50 rounded-2xl">利用者の希望表を読み込んでください</p>}
-                  </div>
+                    </div>
                 </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'result' && (
-          <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-8 gap-4 no-print">
-              <div>
-                <h2 className="text-3xl font-black text-slate-800">AIマッチング結果</h2>
-                <p className="text-slate-500">移動支援・行動援護などのサービス種別と時間を考慮した最適案です。</p>
-              </div>
-              <button onClick={() => window.print()} className="bg-slate-800 text-white px-8 py-4 rounded-2xl font-bold flex items-center gap-2 hover:bg-slate-900 transition-all shadow-lg active:scale-95">
-                <Printer size={20}/> 印刷する（PDF保存）
-              </button>
-            </div>
-
-            {matches.length === 0 ? (
-              <div className="bg-white border-4 border-dashed border-slate-100 rounded-[40px] p-24 text-center space-y-4 no-print">
-                <div className="bg-slate-50 w-24 h-24 rounded-full flex items-center justify-center mx-auto text-slate-200">
-                  <Wand2 size={48}/>
-                </div>
-                <p className="text-slate-400 font-bold text-lg">まだ結果がありません。<br/>「データ入力」で情報を揃えてから開始してください。</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {matches.map(m => (
-                  <div key={m.id} className="bg-white border-2 border-slate-100 p-6 rounded-[32px] shadow-sm hover:shadow-xl transition-all border-t-8 border-t-indigo-500 flex flex-col h-full">
-                    <div className="flex justify-between items-center mb-6">
-                      <div className="bg-indigo-50 text-indigo-700 px-4 py-1.5 rounded-full text-xs font-black tracking-tight">{m.date}</div>
-                      <div className="flex items-center gap-1 text-slate-400 font-bold text-sm"><Clock size={14}/> {m.startTime} - {m.endTime}</div>
-                    </div>
-                    
-                    <div className="bg-slate-50 p-4 rounded-2xl mb-4 border border-slate-100 flex-1">
-                      <div className="flex items-center justify-between mb-2">
-                         <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Helper</span>
-                         <span className="text-[9px] bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full font-bold">{m.serviceType}</span>
-                      </div>
-                      <div className="text-xl font-black text-slate-800 mb-4">{m.helperName}</div>
-                      
-                      <div className="flex items-center justify-center my-2"><ArrowRight className="text-slate-200 rotate-90 md:rotate-0" size={20}/></div>
-                      
-                      <div className="mt-2">
-                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">User</span>
-                        <div className="text-xl font-black text-slate-800">{m.userName}</div>
-                      </div>
-                    </div>
-
-                    <div className="text-[11px] text-slate-500 leading-relaxed bg-indigo-50/30 p-4 rounded-xl border border-indigo-100/50">
-                      <span className="font-black text-indigo-400 mr-2">理由:</span>
-                      {m.reason}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </main>
-
-      <footer className="text-center py-12 text-slate-300 text-[10px] font-bold tracking-widest no-print">
-        © 2024 CAREMATCH AI PRO - FOR BETTER CAREGIVING
-      </footer>
-    </div>
-  );
-};
-
-// React 18のレンダリング
-const container = document.getElementById('root');
-if (container) {
-  const root = createRoot(container);
-  root.render(<App />);
-}
+            );
+        }
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
