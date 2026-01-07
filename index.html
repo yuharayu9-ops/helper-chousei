@@ -1,181 +1,39 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <title>CARE MATCH PRO - 現場運用版</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
-</head>
-<body class="bg-slate-50 min-h-screen p-4 sm:p-8">
-    <div class="max-w-5xl mx-auto">
-        <header class="mb-8 flex justify-between items-end">
-            <div>
-                <h1 class="text-4xl font-black italic text-slate-900 tracking-tighter">CARE MATCH PRO</h1>
-                <p class="text-xs font-bold text-blue-600">200名規模・複数人同時運用モデル</p>
-            </div>
-            <input id="apiKey" type="password" placeholder="API Key" class="p-2 border rounded-lg text-xs w-48 shadow-inner">
-        </header>
+function logicMatching() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const hData = ss.getSheetByName('ヘルパー').getDataRange().getValues();
+  const uData = ss.getSheetByName('利用者').getDataRange().getValues();
+  const ruleData = ss.getSheetByName('配慮点').getDataRange().getValues(); // NGと優先の両方が入っている想定
+  
+  let matchSheet = ss.getSheetByName('マッチング結果') || ss.insertSheet('マッチング結果');
+  matchSheet.clear();
+  matchSheet.appendRow(["利用者名", "希望日時", "第一候補（優先）", "その他可能ヘルパー"]);
 
-        <div class="grid lg:grid-cols-3 gap-8">
-            <div class="lg:col-span-1 space-y-6">
-                <div class="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-200">
-                    <h2 class="font-bold mb-4 flex items-center gap-2">📂 予定表の取り込み</h2>
-                    <div class="space-y-3">
-                        <label class="block p-4 bg-blue-50 text-blue-700 rounded-2xl border-2 border-dashed border-blue-200 text-center cursor-pointer hover:bg-blue-100 transition">
-                            ヘルパーPDF読込
-                            <input type="file" class="hidden" accept=".pdf,image/*" onchange="uploadFile(this, 'H')">
-                        </label>
-                        <label class="block p-4 bg-emerald-50 text-emerald-700 rounded-2xl border-2 border-dashed border-emerald-200 text-center cursor-pointer hover:bg-emerald-100 transition">
-                            利用者PDF読込
-                            <input type="file" class="hidden" accept=".pdf,image/*" onchange="uploadFile(this, 'U')">
-                        </label>
-                    </div>
-                    <div id="status" class="mt-4 text-[10px] font-bold text-slate-400 italic"></div>
-                </div>
+  uData.shift(); // ヘッダー削除
+  uData.forEach(u => {
+    let [date, uName, uStart, uEnd] = u;
+    let priorityHelper = ""; // 優先ヘルパー
+    let otherHelpers = [];   // その他の候補
 
-                <div class="bg-slate-900 text-white p-6 rounded-[2rem] shadow-lg">
-                    <h2 class="font-bold mb-4">🚫 NG相性管理</h2>
-                    <div id="ngList" class="space-y-2 text-xs mb-4 max-h-40 overflow-y-auto"></div>
-                    <div class="flex gap-2">
-                        <input id="ngU" placeholder="利用者" class="w-full p-2 rounded bg-slate-800 text-xs border-none">
-                        <input id="ngH" placeholder="ヘルパー" class="w-full p-2 rounded bg-slate-800 text-xs border-none">
-                        <button onclick="addNG()" class="bg-white text-slate-900 px-3 rounded font-bold">＋</button>
-                    </div>
-                </div>
-            </div>
+    hData.forEach(h => {
+      let [hName, hStart, hEnd] = [h[1], h[2], h[3]];
+      
+      // 1. NGチェック（配慮点シートに「不可」と書いてあれば除外）
+      let isNG = ruleData.some(r => r[1] === hName && r[2].includes(uName) && r[2].includes("不可"));
+      if (isNG) return; // 次のヘルパーへ
 
-            <div class="lg:col-span-2 space-y-6">
-                <div class="bg-white p-6 rounded-[2rem] shadow-sm border border-slate-200">
-                    <h2 class="font-bold mb-4">📝 読み込みデータ（修正・蓄積）</h2>
-                    <div id="dataList" class="space-y-2 max-h-64 overflow-y-auto pr-2 text-sm">
-                        </div>
-                </div>
-
-                <div class="bg-white p-8 rounded-[3rem] shadow-xl border-4 border-blue-50">
-                    <h2 class="text-2xl font-black text-slate-800 mb-6 flex justify-between items-center">
-                        MATCHING
-                        <button onclick="runMatching()" class="bg-blue-600 text-white text-sm px-6 py-2 rounded-full shadow-lg hover:scale-105 transition">一括マッチング実行</button>
-                    </h2>
-                    <div id="matchResults" class="grid sm:grid-cols-2 gap-4"></div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        // PDF.jsのセットアップ
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+      // 2. 時間チェック
+      if (hStart <= uStart && hEnd >= uEnd) {
+        // 3. 優先チェック（配慮点シートに「優先」と書いてあるか）
+        let isPriority = ruleData.some(r => r[1] === hName && r[2].includes(uName) && r[2].includes("優先"));
         
-        let helpers = JSON.parse(localStorage.getItem('cm_helpers') || '[]');
-        let users = JSON.parse(localStorage.getItem('cm_users') || '[]');
-        let ngs = JSON.parse(localStorage.getItem('cm_ngs') || '[]');
-
-        async function uploadFile(input, type) {
-            const file = input.files[0];
-            const key = document.getElementById('apiKey').value;
-            if (!file || !key) return alert("APIキーを入力してください");
-            
-            const status = document.getElementById('status');
-            status.innerText = "AI解析中...（200名規模のデータ蓄積に対応中）";
-
-            try {
-                const base64 = await toBase64(file);
-                // 【404対策】最新のAPIエンドポイントを使用
-                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`;
-                
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{
-                            parts: [
-                                { text: "この予定表から、名前と2月の稼働時間を全て抜き出し、JSON形式で出力してください。{\"data\":[{\"name\":\"名前\",\"startTime\":\"HH:mm\",\"endTime\":\"HH:mm\"}]}" },
-                                { inline_data: { mime_type: "image/jpeg", data: base64 } }
-                            ]
-                        }]
-                    })
-                });
-
-                const json = await response.json();
-                if (json.error) throw new Error(json.error.message);
-                
-                const extracted = JSON.parse(json.candidates[0].content.parts[0].text.match(/\{[\s\S]*\}/)[0]).data;
-                
-                if (type === 'H') helpers = [...helpers, ...extracted];
-                else users = [...users, ...extracted];
-                
-                saveAndRender();
-                status.innerText = "読み込み成功";
-            } catch (err) {
-                status.innerText = "エラー: " + err.message;
-            }
+        if (isPriority) {
+          priorityHelper = hName;
+        } else {
+          otherHelpers.push(hName);
         }
+      }
+    });
 
-        async function toBase64(file) {
-            if (file.type === "application/pdf") {
-                const pdf = await pdfjsLib.getDocument(await file.arrayBuffer()).promise;
-                const page = await pdf.getPage(1);
-                const canvas = document.createElement('canvas');
-                const viewport = page.getViewport({ scale: 2.0 });
-                canvas.height = viewport.height; canvas.width = viewport.width;
-                await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-                return canvas.toDataURL('image/jpeg').split(',')[1];
-            }
-            return new Promise(res => {
-                const r = new FileReader(); r.readAsDataURL(file);
-                r.onload = () => res(r.result.split(',')[1]);
-            });
-        }
-
-        function saveAndRender() {
-            localStorage.setItem('cm_helpers', JSON.stringify(helpers));
-            localStorage.setItem('cm_users', JSON.stringify(users));
-            renderDataList();
-        }
-
-        function renderDataList() {
-            const list = document.getElementById('dataList');
-            list.innerHTML = [...helpers.map(h => ({...h, t:'H'})), ...users.map(u => ({...u, t:'U'}))].map((d, i) => `
-                <div class="flex items-center gap-2 p-2 border-b">
-                    <span class="text-[10px] ${d.t==='H'?'bg-blue-100 text-blue-600':'bg-emerald-100 text-emerald-600'} px-2 py-0.5 rounded font-bold">${d.t}</span>
-                    <input class="flex-1 font-bold outline-none" value="${d.name}" onchange="updateData(${i}, 'name', this.value)">
-                    <span class="text-xs text-slate-400">${d.startTime}-${d.endTime}</span>
-                    <button onclick="deleteData(${i})" class="text-slate-300">×</button>
-                </div>
-            `).join('');
-        }
-
-        function runMatching() {
-            const results = document.getElementById('matchResults');
-            results.innerHTML = users.map(u => {
-                const hits = helpers.filter(h => 
-                    h.startTime <= u.startTime && h.endTime >= u.endTime &&
-                    !ngs.some(n => (n.u === u.name && n.h === h.name) || (n.u === h.name && n.h === u.name))
-                );
-                return `
-                    <div class="p-5 bg-slate-50 rounded-[2rem] border border-slate-100">
-                        <div class="font-black mb-2 flex justify-between">
-                            <span>🏠 ${u.name}</span>
-                            <span class="text-[10px] text-slate-400">${u.startTime}-${u.endTime}</span>
-                        </div>
-                        <div class="space-y-1">
-                            ${hits.map(h => `<div class="bg-white p-2 rounded-xl text-xs font-bold text-blue-600 shadow-sm border border-blue-50">👤 ${h.name}</div>`).join('')}
-                        </div>
-                    </div>
-                `;
-            }).join('');
-        }
-
-        // NG追加、削除、データ修正などの関数（省略せず実装してください）
-        function addNG() {
-            const u = document.getElementById('ngU').value;
-            const h = document.getElementById('ngH').value;
-            if(u && h) { ngs.push({u,h}); localStorage.setItem('cm_ngs', JSON.stringify(ngs)); renderNG(); }
-        }
-        function renderNG() {
-            document.getElementById('ngList').innerHTML = ngs.map((n,i) => `<div class="flex justify-between">${n.u}×${n.h}<button onclick="ngs.splice(${i},1);renderNG()">×</button></div>`).join('');
-        }
-        renderNG();
-    </script>
-</body>
-</html>
+    matchSheet.appendRow([uName, uStart + "-" + uEnd, priorityHelper, otherHelpers.join(", ")]);
+  });
+}
