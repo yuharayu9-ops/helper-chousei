@@ -2,48 +2,54 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CareMatch AI PRO 2026</title>
+    <title>CARE MATCH PRO - FINAL</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
-        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
-        .glass-card { background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(10px); }
-        @media print { .no-print { display: none !important; } }
-    </style>
 </head>
-<body>
+<body class="bg-slate-50">
     <div id="root"></div>
-
     <script type="text/babel">
         const { useState, useEffect } = React;
 
-        const App = () => {
-            const [helpers, setHelpers] = useState(() => JSON.parse(localStorage.getItem('cm_v11_h') || '[]'));
-            const [users, setUsers] = useState(() => JSON.parse(localStorage.getItem('cm_v11_u') || '[]'));
-            const [matches, setMatches] = useState(() => JSON.parse(localStorage.getItem('cm_v11_m') || '[]'));
-            const [apiKey, setApiKey] = useState(() => localStorage.getItem('cm_v11_k') || '');
-            const [activeTab, setActiveTab] = useState('input');
+        function App() {
+            const [helpers, setHelpers] = useState(() => JSON.parse(localStorage.getItem('cm_final_h') || '[]'));
+            const [users, setUsers] = useState(() => JSON.parse(localStorage.getItem('cm_final_u') || '[]'));
+            const [matches, setMatches] = useState(() => JSON.parse(localStorage.getItem('cm_final_m') || '[]'));
+            const [apiKey, setApiKey] = useState(() => localStorage.getItem('cm_final_k') || '');
             const [loading, setLoading] = useState(false);
             const [status, setStatus] = useState('準備完了');
 
             useEffect(() => {
-                localStorage.setItem('cm_v11_h', JSON.stringify(helpers));
-                localStorage.setItem('cm_v11_u', JSON.stringify(users));
-                localStorage.setItem('cm_v11_m', JSON.stringify(matches));
-                localStorage.setItem('cm_v11_k', apiKey);
+                localStorage.setItem('cm_final_h', JSON.stringify(helpers));
+                localStorage.setItem('cm_final_u', JSON.stringify(users));
+                localStorage.setItem('cm_final_m', JSON.stringify(matches));
+                localStorage.setItem('cm_final_k', apiKey);
             }, [helpers, users, matches, apiKey]);
 
-            // AI Studioのロジックを安定版URLで実行
-            const callGemini = async (payload) => {
-                const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+            // AI Studioが「成功」している通信方法を完全に再現
+            const callGemini = async (base64, prompt) => {
+                // v1betaモデルを使い、AI Studioと同じ「generationConfig」を設定
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
                 const response = await fetch(url, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
+                    body: JSON.stringify({
+                        contents: [{
+                            parts: [
+                                { inline_data: { mime_type: "image/jpeg", data: base64 } },
+                                { text: prompt }
+                            ]
+                        }],
+                        generationConfig: {
+                            temperature: 1,
+                            topP: 0.95,
+                            topK: 40,
+                            maxOutputTokens: 8192,
+                            responseMimeType: "application/json"
+                        }
+                    })
                 });
                 const data = await response.json();
                 if (data.error) throw new Error(data.error.message);
@@ -54,185 +60,55 @@
                 const file = e.target.files[0];
                 if (!file || !apiKey) return alert("APIキーを入力してください");
                 setLoading(true);
-                setStatus('AIが解析しています...');
-
+                setStatus('解析中...');
+                
                 const reader = new FileReader();
                 reader.readAsDataURL(file);
                 reader.onload = async () => {
                     const base64 = reader.result.split(',')[1];
                     const prompt = type === 'HELPER' 
-                        ? "画像からヘルパーの氏名、対応可能なサービス（移動支援・行動援護・重度訪問介護・居宅介護から選択）、稼働可能時間を抽出してください。形式：{\"name\":\"氏名\",\"services\":[\"サービス\"],\"schedule\":[{\"date\":\"YYYY-MM-DD\",\"startTime\":\"HH:MM\",\"endTime\":\"HH:MM\"}]}"
-                        : "画像から利用者の氏名、希望サービス、利用希望時間を抽出してください。形式：{\"name\":\"氏名\",\"service\":\"サービス\",\"schedule\":[{\"date\":\"YYYY-MM-DD\",\"startTime\":\"HH:MM\",\"endTime\":\"HH:MM\"}]}";
+                        ? "Extract helper name, services (移動支援, 行動援護, 重度訪問介護, 居宅介護), and availability as JSON: {\"name\":\"\", \"services\":[], \"schedule\":[{\"date\":\"YYYY-MM-DD\", \"startTime\":\"HH:MM\", \"endTime\":\"HH:MM\"}]}"
+                        : "Extract user name, required service, and requests as JSON: {\"name\":\"\", \"service\":\"\", \"schedule\":[{\"date\":\"YYYY-MM-DD\", \"startTime\":\"HH:MM\", \"endTime\":\"HH:MM\"}]}";
 
                     try {
-                        const text = await callGemini({
-                            contents: [{ parts: [
-                                { inline_data: { mime_type: "image/jpeg", data: base64 } },
-                                { text: prompt + "\n必ず純粋なJSON形式のみで回答してください。" }
-                            ] }]
-                        });
-                        const res = JSON.parse(text.match(/\{[\s\S]*\}|\[[\s\S]*\]/)[0]);
-
-                        if (type === 'HELPER') {
-                            setHelpers([...helpers, { id: Date.now().toString(), ...res }]);
-                        } else {
-                            setUsers([...users, { id: Date.now().toString(), ...res }]);
-                        }
-                        setStatus('読み込み成功！');
+                        const jsonText = await callGemini(base64, prompt);
+                        const res = JSON.parse(jsonText);
+                        if (type === 'HELPER') setHelpers([...helpers, { id: Date.now().toString(), ...res }]);
+                        else setUsers([...users, { id: Date.now().toString(), ...res }]);
+                        setStatus('成功！');
                     } catch (err) {
                         setStatus(`エラー: ${err.message}`);
-                        alert("解析に失敗しました。APIキーの権限設定を確認してください。");
+                        console.error(err);
                     } finally { setLoading(false); }
                 };
             };
 
-            const startMatching = async () => {
-                if (!apiKey) return alert("APIキーが必要です");
-                setLoading(true);
-                setStatus('AIが最適なパズルを解いています...');
-                const prompt = `以下の介護スタッフと利用者のリストから、時間が重なり、かつサービス内容が一致する組み合わせを作成してください。
-                ヘルパー情報: ${JSON.stringify(helpers)}
-                利用者情報: ${JSON.stringify(users)}
-                結果は必ずこの形式のJSONリストで返してください: [{"date":"YYYY-MM-DD","startTime":"HH:MM","endTime":"HH:MM","helperName":"...","userName":"...","serviceType":"...","reason":"..."}]`;
-
-                try {
-                    const text = await callGemini({
-                        contents: [{ parts: [{ text: prompt }] }]
-                    });
-                    const res = JSON.parse(text.match(/\[[\s\S]*\]/)[0]);
-                    setMatches(res);
-                    setActiveTab('result');
-                } catch (err) {
-                    alert("マッチングに失敗しました。");
-                } finally { setLoading(false); }
-            };
-
             return (
-                <div className="min-h-screen pb-10">
-                    <nav className="bg-slate-900 text-white p-6 shadow-2xl no-print mb-8">
-                        <div className="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
-                            <div>
-                                <h1 className="text-2xl font-black italic tracking-tighter">CARE MATCH AI PRO</h1>
-                                <p className="text-[10px] text-blue-400 font-bold uppercase tracking-[0.2em]">High Performance Matching System</p>
-                            </div>
-                            <div className="flex items-center gap-3">
-                                <input 
-                                    type="password" 
-                                    placeholder="Google API Key" 
-                                    className="bg-slate-800 border border-slate-700 p-2 rounded-xl text-xs w-48 outline-none focus:ring-2 focus:ring-blue-500"
-                                    value={apiKey} 
-                                    onChange={(e)=>setApiKey(e.target.value)} 
-                                />
-                                <div className="flex bg-slate-800 p-1 rounded-xl">
-                                    <button onClick={() => setActiveTab('input')} className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${activeTab === 'input' ? 'bg-white text-slate-900 shadow' : 'text-slate-400'}`}>入力</button>
-                                    <button onClick={() => setActiveTab('result')} className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${activeTab === 'result' ? 'bg-white text-slate-900 shadow' : 'text-slate-400'}`}>結果</button>
-                                </div>
-                            </div>
+                <div className="max-w-4xl mx-auto my-10 bg-white shadow-xl rounded-3xl overflow-hidden border">
+                    <div className="bg-slate-900 p-6 flex justify-between items-center text-white">
+                        <h1 className="font-bold italic">CARE MATCH FINAL</h1>
+                        <input type="password" placeholder="API Key" className="bg-slate-800 p-2 rounded text-xs w-64 outline-none border border-slate-700" value={apiKey} onChange={(e)=>setApiKey(e.target.value)} />
+                    </div>
+                    <div className="p-10 space-y-8">
+                        <div className="flex gap-4">
+                            <label className="flex-1 bg-blue-600 text-white p-10 rounded-3xl text-center cursor-pointer hover:bg-blue-700 transition-all font-bold">
+                                👤 ヘルパー表
+                                <input type="file" className="hidden" onChange={(e)=>handleFileUpload(e, 'HELPER')} />
+                            </label>
+                            <label className="flex-1 bg-emerald-600 text-white p-10 rounded-3xl text-center cursor-pointer hover:bg-emerald-700 transition-all font-bold">
+                                🏠 利用者表
+                                <input type="file" className="hidden" onChange={(e)=>handleFileUpload(e, 'USER')} />
+                            </label>
                         </div>
-                    </nav>
-
-                    <main className="max-w-6xl mx-auto px-4">
-                        {activeTab === 'input' && (
-                            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                                <div className="lg:col-span-4 space-y-6">
-                                    <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-200 relative overflow-hidden">
-                                        <div className="absolute top-0 left-0 w-2 h-full bg-blue-500"></div>
-                                        <h3 className="font-black text-slate-800 mb-6 flex items-center gap-2 text-sm uppercase tracking-widest">1. 書類をスキャン</h3>
-                                        <div className="space-y-4">
-                                            <label className="block p-6 border-2 border-dashed border-slate-200 rounded-3xl hover:border-blue-500 hover:bg-blue-50 transition-all cursor-pointer text-center group">
-                                                <span className="text-3xl mb-2 block group-hover:scale-110 transition-transform">👤</span>
-                                                <span className="text-xs font-bold text-slate-500">ヘルパー予定表</span>
-                                                <input type="file" className="hidden" onChange={(e) => handleFileUpload(e, 'HELPER')} />
-                                            </label>
-                                            <label className="block p-6 border-2 border-dashed border-slate-200 rounded-3xl hover:border-emerald-500 hover:bg-emerald-50 transition-all cursor-pointer text-center group">
-                                                <span className="text-3xl mb-2 block group-hover:scale-110 transition-transform">🏠</span>
-                                                <span className="text-xs font-bold text-slate-500">利用者希望表</span>
-                                                <input type="file" className="hidden" onChange={(e) => handleFileUpload(e, 'USER')} />
-                                            </label>
-                                        </div>
-                                    </div>
-
-                                    <button 
-                                        onClick={startMatching} 
-                                        disabled={loading || (helpers.length === 0 && users.length === 0)}
-                                        className="w-full bg-blue-600 text-white py-8 rounded-[2.5rem] font-black text-xl shadow-xl shadow-blue-100 hover:bg-blue-700 transition-all active:scale-95 disabled:bg-slate-300 disabled:shadow-none"
-                                    >
-                                        {loading ? 'AI計算中...' : 'マッチング開始 ✨'}
-                                    </button>
-                                    <p className="text-center font-bold text-blue-500 animate-pulse text-sm">{loading ? status : ''}</p>
-                                </div>
-
-                                <div className="lg:col-span-8 bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm min-h-[500px]">
-                                    <div className="flex justify-between items-center mb-8 border-b pb-4">
-                                        <h3 className="font-black text-slate-800 tracking-tighter text-xl italic">DATA LIST</h3>
-                                        <button onClick={()=>{setHelpers([]); setUsers([]); setMatches([]);}} className="text-[10px] font-bold text-slate-300 hover:text-red-500 tracking-widest uppercase">Clear All</button>
-                                    </div>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                        <div className="space-y-3">
-                                            <h4 className="text-[10px] font-black text-blue-500 uppercase tracking-[0.2em] mb-4">Helper ({helpers.length})</h4>
-                                            {helpers.map(h => (
-                                                <div key={h.id} className="p-4 bg-slate-50 rounded-2xl border flex justify-between items-center group">
-                                                    <span className="font-bold text-slate-700">{h.name}</span>
-                                                    <button onClick={()=>setHelpers(helpers.filter(x=>x.id!==h.id))} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100">✕</button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                        <div className="space-y-3">
-                                            <h4 className="text-[10px] font-black text-emerald-500 uppercase tracking-[0.2em] mb-4">User ({users.length})</h4>
-                                            {users.map(u => (
-                                                <div key={u.id} className="p-4 bg-slate-50 rounded-2xl border flex justify-between items-center group">
-                                                    <span className="font-bold text-slate-700">{u.name}</span>
-                                                    <button onClick={()=>setUsers(users.filter(x=>x.id!==u.id))} className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100">✕</button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
-                        {activeTab === 'result' && (
-                            <div className="space-y-8 animate-in fade-in duration-700">
-                                <div className="flex justify-between items-end no-print">
-                                    <div>
-                                        <h2 className="text-4xl font-black italic tracking-tighter text-slate-800">Matching Results</h2>
-                                        <p className="text-slate-400 font-bold text-xs uppercase mt-2">Generated by AI Engine</p>
-                                    </div>
-                                    <button onClick={() => window.print()} className="bg-slate-900 text-white px-8 py-4 rounded-2xl font-black hover:bg-black transition-all shadow-xl active:scale-95">PDF / PRINT</button>
-                                </div>
-
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                                    {matches.map((m, i) => (
-                                        <div key={i} className="bg-white p-8 rounded-[3rem] border-2 border-blue-500 shadow-xl relative overflow-hidden">
-                                            <div className="absolute top-0 right-0 bg-blue-500 text-white text-[10px] px-4 py-1 font-black rounded-bl-xl">{m.date}</div>
-                                            <div className="text-xs font-black text-blue-400 mb-4 tracking-widest">{m.serviceType}</div>
-                                            <div className="flex items-center gap-4 mb-6">
-                                                <div className="flex-1">
-                                                    <p className="text-[10px] text-slate-400 font-bold uppercase">Helper</p>
-                                                    <h4 className="text-xl font-black text-slate-800">{m.helperName}</h4>
-                                                </div>
-                                                <div className="text-slate-200">▶</div>
-                                                <div className="flex-1">
-                                                    <p className="text-[10px] text-slate-400 font-bold uppercase">User</p>
-                                                    <h4 className="text-xl font-black text-slate-800">{m.userName}</h4>
-                                                </div>
-                                            </div>
-                                            <div className="bg-slate-50 p-4 rounded-2xl mb-4 text-center font-black text-slate-600">
-                                                {m.startTime} — {m.endTime}
-                                            </div>
-                                            <div className="text-[11px] text-slate-400 italic bg-blue-50/30 p-4 rounded-2xl border border-blue-50">
-                                                <span className="font-black text-blue-300 mr-1 italic">Reason:</span> {m.reason}
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-                    </main>
+                        <div className="text-center font-bold text-slate-400">{loading ? 'AIが考え中...' : status}</div>
+                        <div className="bg-slate-50 p-6 rounded-2xl">
+                            <h2 className="font-bold mb-4">登録済み人数: ヘルパー{helpers.length}名 / 利用者{users.length}名</h2>
+                            <div className="text-xs text-slate-400">※ここに名前が出れば成功です。</div>
+                        </div>
+                    </div>
                 </div>
             );
-        };
-
+        }
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
     </script>
