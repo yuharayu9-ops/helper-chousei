@@ -2,124 +2,104 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>CARE MATCH - THE FINAL ANSWER</title>
-    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <title>CARE MATCH - LOCAL SCAN</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src='https://unpkg.com/tesseract.js@v4.0.1/dist/tesseract.min.js'></script>
 </head>
-<body class="bg-slate-50 min-h-screen">
-    <div id="root"></div>
-    <script type="text/babel">
-        const { useState } = React;
+<body class="bg-slate-50 p-6 min-h-screen">
+    <div class="max-w-md mx-auto">
+        <header class="text-center mb-10">
+            <h1 class="text-3xl font-black italic text-slate-900 tracking-tighter">CARE MATCH</h1>
+            <p class="text-[10px] font-bold text-blue-500 uppercase tracking-[0.3em]">No-API / On-Device Matching</p>
+        </header>
 
-        function App() {
-            const [helpers, setHelpers] = useState([]);
-            const [users, setUsers] = useState([]);
-            const [apiKey, setApiKey] = useState(localStorage.getItem('last_key') || '');
-            const [status, setStatus] = useState('準備完了');
+        <div class="grid grid-cols-2 gap-4 mb-10">
+            <label class="bg-blue-600 text-white p-8 rounded-[2.5rem] text-center font-bold shadow-xl active:scale-95 cursor-pointer">
+                <span class="text-2xl block mb-2">👤</span>
+                ヘルパー読込
+                <input type="file" class="hidden" accept="image/*" onchange="processImage(this, 'H')">
+            </label>
+            <label class="bg-emerald-600 text-white p-8 rounded-[2.5rem] text-center font-bold shadow-xl active:scale-95 cursor-pointer">
+                <span class="text-2xl block mb-2">🏠</span>
+                利用者読込
+                <input type="file" class="hidden" accept="image/*" onchange="processImage(this, 'U')">
+            </label>
+        </div>
 
-            const callGemini = async (base64) => {
-                // 【404を物理的に回避する最終URL】
-                // v1beta ではなく v1 を使用し、モデル名をパスの深くに埋め込みます
-                const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+        <div id="status" class="bg-white p-5 rounded-3xl mb-10 text-center text-xs font-bold text-slate-400 border border-slate-100 italic shadow-inner">
+            画像を選んでください（API通信なし）
+        </div>
+
+        <div id="results" class="space-y-4">
+            <h2 class="text-[10px] font-black text-slate-300 uppercase tracking-widest px-2">Matching Analysis</h2>
+        </div>
+    </div>
+
+    <script>
+        let helpers = [];
+        let users = [];
+
+        async function processImage(input, type) {
+            const file = input.files[0];
+            if (!file) return;
+
+            const status = document.getElementById('status');
+            status.innerText = "文字を解析しています... (15秒〜30秒)";
+            status.classList.add('text-blue-500', 'animate-pulse');
+
+            try {
+                // ブラウザ内で文字を抽出（API不要）
+                const result = await Tesseract.recognize(file, 'jpn+eng');
+                const text = result.data.text;
                 
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{
-                            parts: [
-                                { text: "以下の画像から「名前」と「勤務時間（開始・終了）」を抽出してください。出力は必ずこのJSON形式のみにしてください: {\"name\": \"名前\", \"schedule\": [{\"startTime\": \"HH:mm\", \"endTime\": \"HH:mm\"}]}" },
-                                { inline_data: { mime_type: "image/jpeg", data: base64 } }
-                            ]
-                        }]
-                    })
-                });
+                // テキストから「名前」と「時間」を抽出するロジック
+                const data = parseText(text);
                 
-                const data = await response.json();
-                if (data.error) throw new Error(`${data.error.message} (${data.error.code})`);
-                
-                const text = data.candidates[0].content.parts[0].text;
-                return JSON.parse(text.match(/\{[\s\S]*\}/)[0]);
-            };
+                if (type === 'H') helpers.push(data);
+                else users.push(data);
 
-            const handleScan = async (e, type) => {
-                const file = e.target.files[0];
-                if (!file || !apiKey) return;
-                setStatus(`${type === 'H' ? 'ヘルパー' : '利用者'}解析中...`);
-                
-                const reader = new FileReader();
-                reader.readAsDataURL(file);
-                reader.onload = async () => {
-                    try {
-                        const res = await callGemini(reader.result.split(',')[1]);
-                        if (type === 'H') setHelpers(prev => [...prev, res]);
-                        else setUsers(prev => [...prev, res]);
-                        setStatus('解析成功！');
-                        localStorage.setItem('last_key', apiKey);
-                    } catch (err) {
-                        setStatus(`エラー: ${err.message}`);
-                    }
-                };
-            };
-
-            const getMatches = () => {
-                const results = [];
-                users.forEach(u => {
-                    u.schedule.forEach(uS => {
-                        const hit = helpers.filter(h => 
-                            h.schedule.some(hS => hS.startTime <= uS.startTime && hS.endTime >= uS.endTime)
-                        );
-                        results.push({ user: u.name, time: `${uS.startTime}-${uS.endTime}`, helpers: hit });
-                    });
-                });
-                return results;
-            };
-
-            return (
-                <div className="max-w-md mx-auto p-6">
-                    <header className="py-10 text-center">
-                        <h1 className="text-4xl font-black italic tracking-tighter text-slate-900">CARE MATCH</h1>
-                        <input type="password" placeholder="API Keyを入力" className="mt-4 w-full p-2 border rounded-xl text-xs text-center" value={apiKey} onChange={(e)=>setApiKey(e.target.value)} />
-                    </header>
-
-                    <div className="grid grid-cols-2 gap-4 mb-10">
-                        <label className="bg-blue-600 text-white p-6 rounded-[2rem] text-center font-bold cursor-pointer shadow-xl active:scale-95">
-                            ヘルパー読込
-                            <input type="file" className="hidden" onChange={(e)=>handleScan(e, 'H')} />
-                        </label>
-                        <label className="bg-emerald-600 text-white p-6 rounded-[2rem] text-center font-bold cursor-pointer shadow-xl active:scale-95">
-                            利用者読込
-                            <input type="file" className="hidden" onChange={(e)=>handleScan(e, 'U')} />
-                        </label>
-                    </div>
-
-                    <div className="bg-white p-4 rounded-2xl shadow-inner mb-10 text-center text-sm font-bold text-slate-500">
-                        Status: <span className="text-blue-600">{status}</span>
-                    </div>
-
-                    <div className="space-y-4">
-                        <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest px-2">Matching Result</h2>
-                        {getMatches().map((m, i) => (
-                            <div key={i} className="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100">
-                                <div className="flex justify-between items-center mb-4">
-                                    <span className="font-black text-slate-800 tracking-tight">🏠 {m.user}</span>
-                                    <span className="bg-slate-100 px-3 py-1 rounded-full text-[10px] font-bold">{m.time}</span>
-                                </div>
-                                {m.helpers.map((h, j) => (
-                                    <div key={j} className="text-sm font-bold text-blue-600 pl-2 border-l-2 border-blue-500 py-1 my-2">
-                                        👤 {h.name} さん
-                                    </div>
-                                ))}
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            );
+                status.innerText = "読み込み完了: " + data.name;
+                status.classList.remove('animate-pulse');
+                runMatching();
+            } catch (err) {
+                status.innerText = "エラー: " + err.message;
+            }
         }
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
+
+        function parseText(text) {
+            // 時間のパターン (HH:mm) を探す
+            const times = text.match(/(\d{1,2}[:：]\d{2})/g) || ["09:00", "18:00"];
+            // 最初の行を名前に仮定
+            const name = text.split('\n').find(line => line.trim().length > 1) || "不明なデータ";
+            
+            return {
+                name: name.trim().substring(0, 10),
+                start: times[0] || "09:00",
+                end: times[times.length - 1] || "18:00"
+            };
+        }
+
+        function runMatching() {
+            const resultDiv = document.getElementById('results');
+            const matchHTML = users.map(u => {
+                const available = helpers.filter(h => h.start <= u.start && h.end >= u.end);
+                return `
+                    <div class="bg-white p-6 rounded-[2.5rem] shadow-sm border border-slate-100">
+                        <div class="flex justify-between items-center mb-4">
+                            <span class="font-black text-slate-800 tracking-tight">🏠 ${u.name}</span>
+                            <span class="bg-slate-100 px-3 py-1 rounded-full text-[10px] font-bold">${u.start}-${u.end}</span>
+                        </div>
+                        ${available.map(h => `
+                            <div class="text-sm font-bold text-blue-600 pl-2 border-l-2 border-blue-500 py-1 my-2">
+                                👤 ${h.name} さん
+                            </div>
+                        `).join('') || '<p class="text-[10px] text-slate-300 italic">可能なヘルパーがいません</p>'}
+                    </div>
+                `;
+            }).join('');
+            
+            resultDiv.innerHTML = '<h2 class="text-[10px] font-black text-slate-300 uppercase tracking-widest px-2">Matching Analysis</h2>' + matchHTML;
+        }
     </script>
 </body>
 </html>
