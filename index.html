@@ -2,97 +2,125 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>CARE MATCH - THE ANSWER</title>
+    <title>CARE MATCH - FULL AUTOMATED</title>
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
-<body class="bg-[#0f172a] min-h-screen flex items-center justify-center p-6">
-    <div id="root" class="w-full max-w-md"></div>
+<body class="bg-slate-100 p-4">
+    <div id="root"></div>
     <script type="text/babel">
         const { useState } = React;
 
         function App() {
-            const [apiKey, setApiKey] = useState(localStorage.getItem('last_resort_key') || '');
-            const [status, setStatus] = useState('キーを入力して画像をアップしてください');
+            const [helpers, setHelpers] = useState([]);
+            const [users, setUsers] = useState([]);
+            const [apiKey, setApiKey] = useState(localStorage.getItem('cm_final_key') || '');
+            const [status, setStatus] = useState('待機中');
 
             const callGemini = async (base64) => {
-                // 【404根絶の最終回答】
-                // 1.5-flash が「見つからない」と言われる場合、1.5-pro に強制スイッチして試行します
-                const models = ["gemini-1.5-flash", "gemini-1.5-pro"];
-                let lastError = "";
-
-                for (const model of models) {
-                    try {
-                        setStatus(`🔄 モデル ${model} で接続試行中...`);
-                        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-                        
-                        const response = await fetch(url, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                contents: [{
-                                    parts: [
-                                        { text: "抽出: 名前, 予定(日付,開始,終了) JSON形式" },
-                                        { inline_data: { mime_type: "image/jpeg", data: base64 } }
-                                    ]
-                                }]
-                            })
-                        });
-                        
-                        const data = await response.json();
-                        if (data.error) {
-                            lastError = data.error.message;
-                            continue; // 次のモデル（Pro）を試す
-                        }
-                        return "成功";
-                    } catch (e) {
-                        lastError = e.message;
-                    }
-                }
-                throw new Error(lastError);
+                // 【404対策】URLの最後にモデル名を結合するのではなく、パスとして指定
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+                
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{
+                            parts: [
+                                { text: "画像から氏名(name)と稼働スケジュール(schedule:[{date,startTime,endTime}])をJSON形式で抽出してください。余計な解説は不要です。" },
+                                { inline_data: { mime_type: "image/jpeg", data: base64 } }
+                            ]
+                        }]
+                    })
+                });
+                
+                const data = await response.json();
+                if (data.error) throw new Error(data.error.message);
+                
+                const text = data.candidates[0].content.parts[0].text;
+                return JSON.parse(text.match(/\{[\s\S]*\}|\[[\s\S]*\]/)[0]);
             };
 
-            const handleFile = async (e) => {
+            const handleUpload = async (e, type) => {
                 const file = e.target.files[0];
-                if (!file || !apiKey) return;
+                if (!file || !apiKey) return alert("APIキーを確認してください");
                 
                 const reader = new FileReader();
                 reader.readAsDataURL(file);
                 reader.onload = async () => {
-                    setStatus('🔄 通信プロトコル検証中...');
+                    setStatus(`${type === 'H' ? 'ヘルパー' : '利用者'}のデータを解析中...`);
                     try {
                         const base64 = reader.result.split(',')[1];
-                        await callGemini(base64);
-                        setStatus('✅ 【大成功】通信が通りました！');
-                        localStorage.setItem('last_resort_key', apiKey);
+                        const result = await callGemini(base64);
+                        if (type === 'H') setHelpers(prev => [...prev, result]);
+                        else setUsers(prev => [...prev, result]);
+                        setStatus('読み込み完了');
+                        localStorage.setItem('cm_final_key', apiKey);
                     } catch (err) {
-                        setStatus(`❌ 失敗: ${err.message}`);
+                        setStatus(`エラー: ${err.message}`);
                     }
                 };
             };
 
+            // 自動マッチングロジック
+            const getMatches = () => {
+                const matches = [];
+                users.forEach(u => {
+                    u.schedule.forEach(uSched => {
+                        const availableHelpers = helpers.filter(h => 
+                            h.schedule.some(hSched => 
+                                hSched.date === uSched.date &&
+                                hSched.startTime <= uSched.startTime &&
+                                hSched.endTime >= uSched.endTime
+                            )
+                        );
+                        matches.push({ user: u.name, date: uSched.date, time: `${uSched.startTime}-${uSched.endTime}`, helpers: availableHelpers });
+                    });
+                });
+                return matches;
+            };
+
             return (
-                <div className="bg-slate-800 p-8 rounded-[2.5rem] shadow-2xl border border-slate-700 text-white font-sans">
-                    <h1 className="text-2xl font-black italic mb-2 text-center text-blue-400 uppercase tracking-tighter">Care Match Final</h1>
-                    <p className="text-[10px] text-center text-slate-400 mb-8 font-bold tracking-[0.3em] uppercase">Multi-Model Sync</p>
-                    
-                    <input 
-                        type="password" 
-                        placeholder="APIキーを入力" 
-                        className="w-full p-4 bg-slate-900 border border-slate-700 rounded-2xl mb-6 text-center text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all"
-                        value={apiKey}
-                        onChange={(e) => setApiKey(e.target.value)}
-                    />
-                    
-                    <label className="block w-full py-10 bg-gradient-to-br from-blue-600 to-blue-700 rounded-[2rem] text-center font-black cursor-pointer hover:from-blue-500 hover:to-blue-600 transition-all shadow-xl active:scale-95 mb-6">
-                        <span className="text-lg">📷 画像を読み込む</span>
-                        <input type="file" className="hidden" onChange={handleFile} accept="image/*" />
-                    </label>
-                    
-                    <div className={`p-5 rounded-2xl text-[11px] font-bold text-center leading-relaxed ${status.includes('成功') ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-slate-900/50 text-slate-400 border border-slate-700'}`}>
-                        {status}
+                <div className="max-w-2xl mx-auto bg-white p-8 rounded-3xl shadow-xl border border-slate-200">
+                    <div className="flex justify-between items-center mb-8 border-b pb-4">
+                        <h1 className="text-2xl font-black italic tracking-tighter">CARE MATCH</h1>
+                        <input type="password" placeholder="API Key" className="bg-slate-50 p-2 rounded text-xs border" value={apiKey} onChange={(e)=>setApiKey(e.target.value)} />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4 mb-8">
+                        <label className="p-6 bg-blue-600 text-white rounded-2xl text-center cursor-pointer font-bold active:scale-95 transition-all">
+                            ヘルパー画像 読込
+                            <input type="file" className="hidden" onChange={(e)=>handleUpload(e, 'H')} />
+                        </label>
+                        <label className="p-6 bg-emerald-600 text-white rounded-2xl text-center cursor-pointer font-bold active:scale-95 transition-all">
+                            利用者画像 読込
+                            <input type="file" className="hidden" onChange={(e)=>handleUpload(e, 'U')} />
+                        </label>
+                    </div>
+
+                    <div className="mb-8 p-4 bg-slate-50 rounded-xl text-center font-bold text-blue-600">
+                        ステータス: {status}
+                    </div>
+
+                    <div className="space-y-6">
+                        <h2 className="font-black text-slate-800 border-l-4 border-slate-800 pl-2 uppercase tracking-widest">Matching Results</h2>
+                        {getMatches().map((m, i) => (
+                            <div key={i} className="p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                                <div className="flex justify-between font-bold mb-3">
+                                    <span>🏠 {m.user}</span>
+                                    <span className="text-sm text-slate-500">{m.date} {m.time}</span>
+                                </div>
+                                <div className="space-y-2">
+                                    {m.helpers.length > 0 ? m.helpers.map((h, j) => (
+                                        <div key={j} className="bg-white p-3 rounded-xl shadow-sm text-sm font-bold text-blue-600 border border-blue-100">
+                                            👤 {h.name} さんが対応可能です
+                                        </div>
+                                    )) : <p className="text-xs text-slate-400">マッチするヘルパーはいません</p>}
+                                </div>
+                            </div>
+                        ))}
                     </div>
                 </div>
             );
